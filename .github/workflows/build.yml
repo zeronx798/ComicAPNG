@@ -1,0 +1,290 @@
+name: Build ComicAPNG
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ startsWith(github.ref, 'refs/tags/') && format('release-{0}', github.ref) || format('build-{0}', github.ref) }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  release_policy:
+    name: Validate release policy
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    outputs:
+      release_kind: ${{ steps.classify.outputs.release_kind }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Classify workflow context and release tag
+        id: classify
+        run: python scripts/classify_release_tag.py
+
+      - name: Verify release commit is on main
+        if: steps.classify.outputs.release_kind != 'none'
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "::error title=Release tag is not on main::Release tags must point to a commit already merged into main. The tag was not changed."
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.display_name }}
+    needs:
+      - release_policy
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - display_name: Windows x64
+            runner: windows-latest
+            platform: windows
+            python_machine: amd64
+            artifact_name: ComicAPNG-Windows-x64
+            archive_name: ComicAPNG-Windows-x64.zip
+          - display_name: Linux x64
+            runner: ubuntu-22.04
+            platform: linux
+            python_machine: x86_64
+            artifact_name: ComicAPNG-Linux-x64
+            archive_name: ComicAPNG-Linux-x64.tar.gz
+          - display_name: macOS Intel
+            runner: macos-15-intel
+            platform: macos
+            python_machine: x86_64
+            bundle_arch: x86_64
+            artifact_name: ComicAPNG-macOS-x64
+            archive_name: ComicAPNG-macOS-x64.zip
+          - display_name: macOS Apple Silicon
+            runner: macos-latest
+            platform: macos
+            python_machine: arm64
+            bundle_arch: arm64
+            artifact_name: ComicAPNG-macOS-arm64
+            archive_name: ComicAPNG-macOS-arm64.zip
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Verify runner architecture
+        run: python -c "import platform; actual = platform.machine().lower(); expected = '${{ matrix.python_machine }}'; assert actual == expected, f'Expected {expected}, found {actual}'"
+
+      - name: Upgrade build tooling
+        run: python -m pip install --upgrade pip setuptools wheel
+
+      - name: Install ComicAPNG and build dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Enforce ASCII source policy
+        run: python scripts/check_source_ascii.py
+
+      - name: Run lint checks
+        run: python -m ruff check .
+
+      - name: Validate packaging resources
+        run: python scripts/validate_packaging.py
+
+      - name: Build with PyInstaller
+        run: python -m PyInstaller --clean --noconfirm ComicAPNG.spec
+
+      - name: Verify frozen runtime resources
+        run: python scripts/validate_frozen_archive.py
+
+      - name: Smoke-test Windows application
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $Executable = (Resolve-Path "dist/ComicAPNG.exe").Path
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $Process = Start-Process -FilePath $Executable -ArgumentList "--packaging-smoke-test" -Wait -PassThru -WindowStyle Hidden
+          if ($Process.ExitCode -ne 0) {
+              throw "Frozen application smoke test failed with exit code $($Process.ExitCode)."
+          }
+
+      - name: Package Windows archive
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $Executable = "dist/ComicAPNG.exe"
+          if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
+              throw "Expected executable was not produced: $Executable"
+          }
+          $Payload = "release-stage/ComicAPNG"
+          $Archive = "release/${{ matrix.archive_name }}"
+          New-Item -ItemType Directory -Force -Path $Payload, "release" | Out-Null
+          Copy-Item -LiteralPath $Executable -Destination $Payload
+          Copy-Item -LiteralPath "LICENSE", "NOTICE", "src/comicapng/resources/icons/ComicAPNG.png" -Destination $Payload
+          Compress-Archive -LiteralPath $Payload -DestinationPath $Archive -CompressionLevel Optimal
+          $Archives = @(Get-ChildItem -LiteralPath "release" -File)
+          if ($Archives.Count -ne 1 -or $Archives[0].Name -ne "${{ matrix.archive_name }}") {
+              throw "Windows packaging did not produce exactly one expected archive."
+          }
+
+      - name: Smoke-test Linux application
+        if: matrix.platform == 'linux'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          test -x dist/ComicAPNG
+          ./dist/ComicAPNG --packaging-smoke-test
+
+      - name: Package Linux archive
+        if: matrix.platform == 'linux'
+        run: |
+          test -x dist/ComicAPNG
+          mkdir -p release-stage/ComicAPNG release
+          install -m 0755 dist/ComicAPNG release-stage/ComicAPNG/ComicAPNG
+          install -m 0644 LICENSE NOTICE src/comicapng/resources/icons/ComicAPNG.png release-stage/ComicAPNG/
+          tar -C release-stage -czf "release/${{ matrix.archive_name }}" ComicAPNG
+          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 1
+          test -f "release/${{ matrix.archive_name }}"
+          tar -tzf "release/${{ matrix.archive_name }}" >/dev/null
+
+      - name: Verify and smoke-test macOS application
+        if: matrix.platform == 'macos'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          test -d dist/ComicAPNG.app
+          binary="dist/ComicAPNG.app/Contents/MacOS/ComicAPNG"
+          plist="dist/ComicAPNG.app/Contents/Info.plist"
+          test -x "$binary"
+          test "$(lipo -archs "$binary")" = "${{ matrix.bundle_arch }}"
+          plutil -lint "$plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" = "org.comicapng.ComicAPNG"
+          expected_version="$(python -c 'from comicapng import __version__; print(__version__)')"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")" = "$expected_version"
+          icon_file="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$plist")"
+          test -f "dist/ComicAPNG.app/Contents/Resources/$icon_file"
+          "$binary" --packaging-smoke-test
+
+      - name: Package macOS archive
+        if: matrix.platform == 'macos'
+        run: |
+          test -d dist/ComicAPNG.app
+          mkdir -p release-stage/ComicAPNG release
+          /usr/bin/ditto dist/ComicAPNG.app release-stage/ComicAPNG/ComicAPNG.app
+          install -m 0644 LICENSE NOTICE src/comicapng/resources/icons/ComicAPNG.png release-stage/ComicAPNG/
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent release-stage/ComicAPNG "release/${{ matrix.archive_name }}"
+          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 1
+          test -f "release/${{ matrix.archive_name }}"
+          unzip -tq "release/${{ matrix.archive_name }}"
+
+      - name: Upload packaged build
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: release/${{ matrix.archive_name }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  release:
+    name: Publish GitHub Release
+    if: >-
+      github.event_name == 'push' &&
+      startsWith(github.ref, 'refs/tags/') &&
+      (needs.release_policy.outputs.release_kind == 'stable' ||
+      needs.release_policy.outputs.release_kind == 'rc')
+    needs:
+      - release_policy
+      - build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download platform archives
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ComicAPNG-*
+          path: release
+          merge-multiple: true
+
+      - name: Verify archives and generate checksums
+        run: |
+          expected=(
+            "ComicAPNG-Windows-x64.zip"
+            "ComicAPNG-Linux-x64.tar.gz"
+            "ComicAPNG-macOS-x64.zip"
+            "ComicAPNG-macOS-arm64.zip"
+          )
+          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 4
+          for archive in "${expected[@]}"; do
+            test -f "release/$archive"
+          done
+          (
+            cd release
+            sha256sum "${expected[@]}" > SHA256SUMS.txt
+          )
+
+      - name: Create GitHub prerelease
+        id: publish_rc
+        if: needs.release_policy.outputs.release_kind == 'rc'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          assets=(
+            "release/ComicAPNG-Windows-x64.zip"
+            "release/ComicAPNG-Linux-x64.tar.gz"
+            "release/ComicAPNG-macOS-x64.zip"
+            "release/ComicAPNG-macOS-arm64.zip"
+            "release/SHA256SUMS.txt"
+          )
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" --verify-tag --generate-notes --prerelease
+
+      - name: Create stable GitHub Release
+        id: publish_stable
+        if: needs.release_policy.outputs.release_kind == 'stable'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          assets=(
+            "release/ComicAPNG-Windows-x64.zip"
+            "release/ComicAPNG-Linux-x64.tar.gz"
+            "release/ComicAPNG-macOS-x64.zip"
+            "release/ComicAPNG-macOS-arm64.zip"
+            "release/SHA256SUMS.txt"
+          )
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" --verify-tag --generate-notes
