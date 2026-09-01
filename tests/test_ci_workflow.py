@@ -165,6 +165,47 @@ def test_workflow_builds_exactly_four_named_archives() -> None:
     assert upload["with"]["if-no-files-found"] == "error"
 
 
+def test_linux_qt_tests_install_runtime_dependencies_and_run_offscreen() -> None:
+    steps = _workflow()["jobs"]["build"]["steps"]
+    dependency_step = next(step for step in steps if "apt-get install" in step.get("run", ""))
+    assert dependency_step["if"] == "matrix.platform == 'linux'"
+    for package in (
+        "libdbus-1-3",
+        "libegl1",
+        "libgl1",
+        "libxcb-cursor0",
+        "libxkbcommon-x11-0",
+    ):
+        assert package in dependency_step["run"]
+
+    test_steps = [step for step in steps if "python -m pytest" in step.get("run", "")]
+    assert len(test_steps) == 2
+    linux_test = next(step for step in test_steps if step["if"] == "matrix.platform == 'linux'")
+    other_test = next(step for step in test_steps if step["if"] == "matrix.platform != 'linux'")
+    assert linux_test["env"] == {"QT_QPA_PLATFORM": "offscreen"}
+    assert linux_test["run"] == "python -m pytest"
+    assert other_test["run"] == "python -m pytest"
+    assert steps.index(dependency_step) < steps.index(linux_test)
+    assert all("-k" not in step["run"] and "--ignore" not in step["run"] for step in test_steps)
+
+
+def test_macos_bundle_diagnostics_precede_frozen_validation() -> None:
+    steps = _workflow()["jobs"]["build"]["steps"]
+    diagnostic = next(
+        step
+        for step in steps
+        if "find dist/ComicAPNG.app/Contents" in step.get("run", "")
+    )
+    validation = next(
+        step
+        for step in steps
+        if "python scripts/validate_frozen_archive.py" in step.get("run", "")
+    )
+    assert diagnostic["if"] == "matrix.platform == 'macos'"
+    assert "plugins/platforms" in diagnostic["run"]
+    assert steps.index(diagnostic) < steps.index(validation)
+
+
 def test_release_reuses_every_build_archive_without_rebuilding() -> None:
     release = _workflow()["jobs"]["release"]
     uses = [step.get("uses") for step in release["steps"] if "uses" in step]

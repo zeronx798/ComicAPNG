@@ -179,6 +179,8 @@ Automated macOS bundles are not signed with an Apple Developer ID and are not no
 
 `scripts/validate_packaging.py` validates source resources and installed native Qt plugins. `scripts/validate_frozen_archive.py` inspects the built PyInstaller archive for native/offscreen Qt platform plugins, both locales, the icon, legal files, and qtawesome data. Each native job also starts the frozen application in Qt offscreen mode.
 
+PyInstaller's PySide6 hooks use `PySide6/plugins/platforms` on Windows and `PySide6/Qt/plugins/platforms` on Linux and macOS. The frozen validator recognizes those platform-specific roots, including a macOS `.app` prefix such as `Contents/Frameworks`, but still requires each plugin to be inside the Qt platforms directory. Cocoa is the native macOS plugin. The offscreen plugin is also required on every target because the noninteractive frozen smoke test explicitly selects it.
+
 ## 14. GitHub Actions CI
 
 The workflow is `.github/workflows/build.yml`, displayed in GitHub Actions as **Build ComicAPNG**. It supports `workflow_dispatch`, pull requests targeting `main`, pushes to `main`, and pushed tags matching `v*`.
@@ -188,6 +190,8 @@ A read-only `release_policy` job classifies the event before the build matrix. F
 ### workflow_dispatch
 
 Manual dispatch is the primary full pre-release test. It runs policy validation, all tests, packaging validation, and all four native builds. It uploads four Actions artifacts but never creates a tag or GitHub Release, even if the selected dispatch ref is itself a release tag.
+
+The Ubuntu job installs the small runtime library set required by the current PySide6 QtGui and XCB components: `libegl1`, `libgl1`, `libxkbcommon-x11-0`, `libxcb-cursor0`, and `libdbus-1-3`. Linux pytest runs with `QT_QPA_PLATFORM=offscreen`; this is scoped to CI tests and does not change the application's normal runtime platform selection.
 
 ### Pull Requests
 
