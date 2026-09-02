@@ -1,0 +1,14 @@
+{
+  "id": "org.comicapng.source.jmcomic",
+  "name": "JMComic",
+  "version": "0.1.0",
+  "api_version": 1,
+  "entrypoint": "comicapng.extensions.jmcomic.plugin:create_plugin",
+  "capabilities": [
+    "search",
+    "comic_details",
+    "chapters",
+    "materialize_pages"
+  ],
+  "official": true
+}

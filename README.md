@@ -1,6 +1,6 @@
 # ComicAPNG
 
-ComicAPNG is a cross-platform PySide6 desktop application for creating, extracting, and reading APNG comic books. Every APNG frame is one comic page, and all workflows live in one native application window.
+ComicAPNG is a cross-platform PySide6 desktop application for discovering sources and creating, extracting, and reading APNG comic books. Every APNG frame is one comic page, and all workflows live in one native application window.
 
 Documentation:
 
@@ -9,8 +9,11 @@ Documentation:
 
 ## Features
 
+- Search installed source plugins, inspect comics and chapters, materialize decoded pages, and send them to the normal Create workflow.
+- Use the official JMComic source backed by `jmcomic` 2.7.x or the deterministic offline test source.
 - Import files or folders, validate images by content, and sort filenames naturally.
-- Select multiple page thumbnails, box-select, remove, and drag pages to reorder them.
+- Select multiple page thumbnails, box-select, remove, and drag pages to any insertion point.
+- Right-click a page to move it up, down, to the top, or to the bottom.
 - Select a cover, which is exported exactly once as APNG frame 0.
 - Render every page to one fixed RGBA canvas without stretching or cropping artwork.
 - Center proportionally fitted pages over transparent padding.
@@ -30,6 +33,7 @@ ComicAPNG private JSON metadata is optional. Generic standards-compliant APNG fi
 - Pillow
 - platformdirs
 - qtawesome
+- jmcomic 2.7.x
 
 End users can use a PyInstaller build and do not need Python installed.
 
@@ -76,6 +80,16 @@ python -m pytest
 python -m ruff check .
 ```
 
+Generate the ten deterministic varied pages used for manual reorder testing:
+
+```sh
+python scripts/generate_reorder_fixtures.py --output .tmp/reorder-fixtures
+```
+
+Import that output directory into Create, or use the bundled Test Source to exercise the same
+Source-to-Create path without network access. The generated files are local test data and need not
+be committed.
+
 Primary source files are ASCII-only. All visible interface text is stored in packaged JSON localization resources. English and Simplified Chinese are included.
 
 ## Packaging
@@ -90,7 +104,7 @@ Use the platform build script from the matching environment:
 sh ./scripts/build.sh
 ```
 
-The shared `ComicAPNG.spec` collects qtawesome fonts and packaged localization data. Run each target build on its native operating system. PyInstaller does not cross-compile between Windows, macOS, and Linux.
+The shared `ComicAPNG.spec` collects qtawesome fonts, localization data, bundled source manifests, jmcomic metadata/modules, curl-cffi native components, and third-party notices. Frozen smoke tests start the Plugin Host and exercise the offline test source without contacting JMComic. Run each target build on its native operating system. PyInstaller does not cross-compile between Windows, macOS, and Linux.
 
 The application bundle icon is generated from the same Font Awesome icon used by the interface. Run `python scripts/generate_app_icon.py` after intentionally changing that icon. The spec also accepts `COMICAPNG_CODESIGN_IDENTITY` and `COMICAPNG_ENTITLEMENTS_FILE` for future secrets-based macOS signing configuration.
 
@@ -105,7 +119,7 @@ Development builds are available from the GitHub repository under **Actions**, t
 
 The Linux archive is built on Ubuntu 22.04 and is not claimed to work on every Linux distribution. The two macOS builds are architecture-specific, not universal applications. Automated macOS builds are not signed with an Apple Developer ID and are not notarized, so Gatekeeper may require manual approval. PyInstaller may apply the ad-hoc signatures required for executable integrity, but those signatures do not establish developer trust.
 
-Release-candidate tags use `vX.Y.Z-rc.N` and create GitHub prereleases. Stable tags use `vX.Y.Z` and create normal releases. Each valid tag receives its own complete build; the release job attaches those exact build archives plus `SHA256SUMS.txt`. Other `v*` tag forms are rejected. See the [release procedure](docs/tech-specs.md#16-release-procedure) for the recommended PR, manual-build, RC, and stable sequence.
+Release-candidate tags use `vX.Y.Z-rc.N` and create GitHub prereleases. Stable tags use `vX.Y.Z` and create normal releases. Each valid tag receives its own complete build; the release job attaches those exact build archives plus `SHA256SUMS.txt`. Other `v*` tag forms are rejected. See the [release procedure](docs/tech-specs.md#18-release-procedure) for the recommended PR, manual-build, RC, and stable sequence.
 
 ## APNG format policy
 
@@ -118,6 +132,8 @@ EXIF is stored in the standard PNG `eXIf` chunk. User PNG text and versioned Com
 - Pillow must decode earlier animation state when seeking into some externally optimized APNG files. ComicAPNG hides this behind a frame-access abstraction and keeps only a small LRU of decoded full-resolution pages.
 - Original page bounds can be reconstructed only when trustworthy ComicAPNG geometry metadata exists and the user enables that extraction option. ComicAPNG never guesses a crop from alpha values.
 - PyInstaller builds must be produced separately on Windows, macOS, and Linux.
+- Plugin process isolation protects application stability but is not a security sandbox.
+- Normal CI does not contact JMComic; live source behavior requires an explicit opt-in or manual test.
 
 ## License
 

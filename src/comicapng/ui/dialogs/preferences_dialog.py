@@ -2,31 +2,44 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
 )
 
 from comicapng.core.models import DEFAULT_BODY_DURATION_MS, DEFAULT_COVER_DURATION_MS
 from comicapng.i18n import I18n
+from comicapng.plugins.manager import PluginManager
 from comicapng.services.settings import AppSettings
 from comicapng.ui.theme import BACKGROUND
 from comicapng.ui.widgets.duration_spin_box import DurationSpinBox
 
 
 class PreferencesDialog(QDialog):
-    def __init__(self, i18n: I18n, settings: AppSettings, parent=None) -> None:
+    def __init__(
+        self,
+        i18n: I18n,
+        settings: AppSettings,
+        parent=None,
+        plugin_manager: PluginManager | None = None,
+    ) -> None:
         super().__init__(parent)
         self.i18n = i18n
         self.settings = settings
+        self.plugin_manager = plugin_manager
         self.setWindowTitle(i18n.tr("preferences.title"))
         self.setMinimumWidth(460)
         root = QVBoxLayout(self)
@@ -76,6 +89,60 @@ class PreferencesDialog(QDialog):
         body_duration_layout.addStretch()
         form.addRow(i18n.tr("preferences.default_body_duration"), body_duration_layout)
 
+        plugins_heading = QLabel(i18n.tr("preferences.plugins"))
+        plugins_heading.setObjectName("heading")
+        root.addWidget(plugins_heading)
+        self.plugin_table = QTableWidget(0, 4)
+        self.plugin_table.setHorizontalHeaderLabels(
+            [
+                i18n.tr("preferences.plugin_enabled"),
+                i18n.tr("preferences.plugin_name"),
+                i18n.tr("preferences.plugin_version"),
+                i18n.tr("preferences.plugin_status"),
+            ]
+        )
+        self.plugin_table.verticalHeader().hide()
+        self.plugin_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.plugin_table.setMinimumHeight(150)
+        root.addWidget(self.plugin_table)
+        if plugin_manager is not None:
+            statuses = plugin_manager.statuses()
+            self.plugin_table.setRowCount(len(statuses))
+            for row, status in enumerate(statuses):
+                enabled = QTableWidgetItem()
+                enabled.setFlags(
+                    Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
+                )
+                enabled.setCheckState(
+                    Qt.CheckState.Checked if status.enabled else Qt.CheckState.Unchecked
+                )
+                enabled.setData(Qt.ItemDataRole.UserRole, status.manifest.plugin_id)
+                name = QTableWidgetItem(status.manifest.name)
+                version = QTableWidgetItem(status.manifest.version)
+                availability = (
+                    i18n.tr("preferences.plugin_available")
+                    if status.available is True
+                    else i18n.tr("preferences.plugin_unavailable")
+                    if status.available is False
+                    else i18n.tr("preferences.plugin_not_checked")
+                )
+                state = QTableWidgetItem(availability)
+                for column, item in enumerate((enabled, name, version, state)):
+                    if column:
+                        item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                    self.plugin_table.setItem(row, column, item)
+
+        self.jmcomic_include_cover = QCheckBox(i18n.tr("preferences.jmcomic_include_cover"))
+        self.jmcomic_include_cover.setChecked(
+            settings.boolean(
+                "plugins/org.comicapng.source.jmcomic/include_cover",
+                True,
+            )
+        )
+        root.addWidget(self.jmcomic_include_cover)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
@@ -99,4 +166,16 @@ class PreferencesDialog(QDialog):
         self.settings.set_value("reader/cache_pages", self.cache_pages.value())
         self.settings.set_value("creator/cover_duration", self.cover_duration.milliseconds())
         self.settings.set_value("creator/body_duration", self.body_duration.milliseconds())
+        if self.plugin_manager is not None:
+            for row in range(self.plugin_table.rowCount()):
+                item = self.plugin_table.item(row, 0)
+                plugin_id = str(item.data(Qt.ItemDataRole.UserRole))
+                self.plugin_manager.set_enabled(
+                    plugin_id,
+                    item.checkState() == Qt.CheckState.Checked,
+                )
+        self.settings.set_value(
+            "plugins/org.comicapng.source.jmcomic/include_cover",
+            self.jmcomic_include_cover.isChecked(),
+        )
         self.accept()

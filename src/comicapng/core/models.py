@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -80,6 +81,38 @@ class ComicBook:
             found = found or page.is_cover
         if not found:
             raise ValueError("Cover page was not found")
+
+    def move_page(self, source_index: int, target_index: int) -> bool:
+        """Move one page to its final index and preserve the page object."""
+        if not 0 <= target_index < len(self.pages):
+            raise IndexError("Target page index is out of range")
+        return self.move_pages((source_index,), target_index)
+
+    def move_pages(self, source_indices: Iterable[int], target_index: int) -> bool:
+        """Move pages as an ordered block to a final insertion index.
+
+        ``target_index`` is interpreted after the selected pages are removed. It
+        is therefore the final index of the first page in the moved block.
+        """
+        indices = sorted(set(source_indices))
+        if not indices:
+            raise ValueError("At least one source page index is required")
+        if indices[0] < 0 or indices[-1] >= len(self.pages):
+            raise IndexError("Source page index is out of range")
+
+        moved_indexes = set(indices)
+        moved = [self.pages[index] for index in indices]
+        remaining = [
+            page for index, page in enumerate(self.pages) if index not in moved_indexes
+        ]
+        if not 0 <= target_index <= len(remaining):
+            raise IndexError("Target page index is out of range")
+
+        reordered = [*remaining[:target_index], *moved, *remaining[target_index:]]
+        if all(before is after for before, after in zip(self.pages, reordered, strict=True)):
+            return False
+        self.pages[:] = reordered
+        return True
 
     def export_pages(self) -> list[ComicPage]:
         """Return pages with the cover first and without duplication."""

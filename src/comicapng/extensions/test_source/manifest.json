@@ -1,0 +1,14 @@
+{
+  "id": "org.comicapng.source.test",
+  "name": "ComicAPNG Test Source",
+  "version": "0.1.0",
+  "api_version": 1,
+  "entrypoint": "comicapng.extensions.test_source.plugin:create_plugin",
+  "capabilities": [
+    "search",
+    "comic_details",
+    "chapters",
+    "materialize_pages"
+  ],
+  "official": true
+}

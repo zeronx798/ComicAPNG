@@ -6,7 +6,7 @@ import copy
 from pathlib import Path
 from threading import Event
 
-from PySide6.QtCore import QSize, Qt, QThreadPool, Signal
+from PySide6.QtCore import QItemSelectionModel, QSize, Qt, QThreadPool, Signal
 from PySide6.QtGui import QBrush, QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QMessageBox,
     QProgressDialog,
     QToolButton,
@@ -103,8 +104,10 @@ class CreatorPage(QWidget):
         self.page_list.setGridSize(QSize(thumbnail_size + 36, thumbnail_size + 60))
         self.page_list.setAccessibleName(self.i18n.tr("creator.page_list"))
         self.page_list.setToolTip(self.i18n.tr("creator.page_list_help"))
+        self.page_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.page_list.paths_dropped.connect(self.import_entries)
-        self.page_list.order_changed.connect(self._synchronize_order)
+        self.page_list.pages_move_requested.connect(self._move_pages_from_view)
+        self.page_list.customContextMenuRequested.connect(self._show_page_context_menu)
         self.page_list.itemSelectionChanged.connect(self._update_actions)
         root.addWidget(self.page_list, 1)
 
@@ -249,6 +252,67 @@ class CreatorPage(QWidget):
         )
         self.thread_pool.start(worker)
 
+    def load_book(self, book: ComicBook) -> bool:
+        """Replace the editor with a normal ComicBook prepared by a source workflow."""
+        if self._active_worker is not None:
+            return False
+        source_paths = [page.source_path for page in book.pages]
+        if not source_paths or any(path is None for path in source_paths):
+            return False
+        thumbnail_size = self.page_list.iconSize()
+
+        def task(cancel_event: Event, progress):
+            thumbnails: list[Path] = []
+            for index, path in enumerate(source_paths):
+                if cancel_event.is_set():
+                    raise OperationCancelledError("Source book loading was cancelled")
+                if path is None:
+                    raise InvalidImageError("Source book page has no local image")
+                thumbnails.append(
+                    self.thumbnail_cache.source_thumbnail(
+                        path,
+                        (thumbnail_size.width(), thumbnail_size.height()),
+                    )
+                )
+                progress(index + 1, len(source_paths))
+            return book, thumbnails
+
+        worker = Worker(task)
+        self._active_worker = worker
+        dialog = self._show_progress("creator.loading_source", len(book.pages), worker)
+        worker.signals.result.connect(self._finish_source_book_load)
+        worker.signals.error.connect(self._worker_error)
+        worker.signals.canceled.connect(
+            lambda: self.status_message.emit(self.i18n.tr("common.cancelled"))
+        )
+        worker.signals.finished.connect(self._operation_finished)
+        worker.signals.progress.connect(
+            lambda current, total: self._update_progress(
+                dialog,
+                label_key="creator.loading_source_progress",
+                current=current,
+                total=total,
+            )
+        )
+        self.thread_pool.start(worker)
+        return True
+
+    def _finish_source_book_load(self, result: object) -> None:
+        book, thumbnails = result  # type: ignore[misc]
+        if not isinstance(book, ComicBook):
+            return
+        self.page_list.clear()
+        self.book = book
+        for page, thumbnail in zip(book.pages, thumbnails, strict=True):
+            self.page_list.addItem(self._make_item(page, thumbnail))
+        self.cover_duration.set_milliseconds(book.cover_duration_ms)
+        self.body_duration.set_milliseconds(book.body_duration_ms)
+        direction_index = self.direction_combo.findData(book.reading_direction)
+        if direction_index >= 0:
+            self.direction_combo.setCurrentIndex(direction_index)
+        self._refresh_items()
+        self.status_message.emit(self.i18n.tr("creator.source_loaded", count=len(book.pages)))
+
     def _finish_import(self, result: object) -> None:
         imported, errors = result  # type: ignore[misc]
         had_pages = bool(self.book.pages)
@@ -280,17 +344,110 @@ class CreatorPage(QWidget):
         item.setToolTip(str(page.source_path or ""))
         return item
 
-    def _synchronize_order(self) -> None:
-        by_id = {page.page_id: page for page in self.book.pages}
-        ordered: list[ComicPage] = []
-        for index in range(self.page_list.count()):
-            page_id = str(self.page_list.item(index).data(Qt.ItemDataRole.UserRole))
-            page = by_id.get(page_id)
-            if page is not None:
-                ordered.append(page)
-        if len(ordered) == len(self.book.pages):
-            self.book.pages = ordered
+    def _move_pages_from_view(self, source_indices: list[int], target_index: int) -> None:
+        if self._active_worker is not None:
+            return
+        if self.book.move_pages(source_indices, target_index):
+            self._apply_book_order_to_view()
+
+    def _apply_book_order_to_view(self) -> None:
+        """Apply authoritative ComicBook order while retaining items and selection."""
+        selected_ids = self._selected_page_ids()
+        current_item = self.page_list.currentItem()
+        current_id = (
+            str(current_item.data(Qt.ItemDataRole.UserRole))
+            if current_item is not None
+            else None
+        )
+        items_by_id = {
+            str(self.page_list.item(row).data(Qt.ItemDataRole.UserRole)): self.page_list.item(row)
+            for row in range(self.page_list.count())
+        }
+        if set(items_by_id) != {page.page_id for page in self.book.pages}:
+            return
+
+        previous_block = self.page_list.blockSignals(True)
+        try:
+            while self.page_list.count():
+                self.page_list.takeItem(0)
+            for page in self.book.pages:
+                item = items_by_id[page.page_id]
+                self.page_list.addItem(item)
+                item.setSelected(page.page_id in selected_ids)
+            if current_id is not None and current_id in items_by_id:
+                self.page_list.setCurrentItem(
+                    items_by_id[current_id],
+                    QItemSelectionModel.SelectionFlag.NoUpdate,
+                )
+        finally:
+            self.page_list.blockSignals(previous_block)
+        self.page_list.doItemsLayout()
+        self.page_list.viewport().update()
         self._refresh_items()
+
+    def _show_page_context_menu(self, position) -> None:
+        item = self.page_list.itemAt(position)
+        if item is None or self._active_worker is not None:
+            return
+        self._prepare_context_item(item)
+        page_id = str(item.data(Qt.ItemDataRole.UserRole))
+        menu = self._build_page_context_menu(page_id)
+        menu.exec(self.page_list.viewport().mapToGlobal(position))
+
+    def _prepare_context_item(self, item) -> None:
+        """Apply conventional right-click selection without losing a selected block."""
+        if not item.isSelected():
+            self.page_list.clearSelection()
+            item.setSelected(True)
+        self.page_list.setCurrentItem(item, QItemSelectionModel.SelectionFlag.NoUpdate)
+
+    def _build_page_context_menu(self, page_id: str) -> QMenu:
+        """Build actions for the current page; multi-selection remains unchanged."""
+        menu = QMenu(self.page_list)
+        menu.setObjectName("create_page_context_menu")
+        source_index = self._page_index(page_id)
+        definitions = (
+            ("move_up", "create.page.move_up", source_index > 0),
+            ("move_down", "create.page.move_down", 0 <= source_index < len(self.book.pages) - 1),
+            ("move_top", "create.page.move_top", source_index > 0),
+            (
+                "move_bottom",
+                "create.page.move_bottom",
+                0 <= source_index < len(self.book.pages) - 1,
+            ),
+        )
+        for operation, text_key, enabled in definitions:
+            action = menu.addAction(icon(operation), self.i18n.tr(text_key))
+            action.setObjectName(f"create_page_{operation}")
+            action.setEnabled(enabled)
+            action.triggered.connect(
+                lambda _checked=False, current_operation=operation: self._move_context_page(
+                    page_id, current_operation
+                )
+            )
+        return menu
+
+    def _page_index(self, page_id: str) -> int:
+        return next(
+            (index for index, page in enumerate(self.book.pages) if page.page_id == page_id),
+            -1,
+        )
+
+    def _move_context_page(self, page_id: str, operation: str) -> None:
+        """Move only the context page, even when a larger selection exists."""
+        source_index = self._page_index(page_id)
+        if source_index < 0:
+            return
+        target_index = {
+            "move_up": source_index - 1,
+            "move_down": source_index + 1,
+            "move_top": 0,
+            "move_bottom": len(self.book.pages) - 1,
+        }.get(operation, source_index)
+        if target_index == source_index or not 0 <= target_index < len(self.book.pages):
+            return
+        if self.book.move_page(source_index, target_index):
+            self._apply_book_order_to_view()
 
     def _refresh_items(self) -> None:
         by_id = {page.page_id: page for page in self.book.pages}

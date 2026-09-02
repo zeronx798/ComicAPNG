@@ -1,0 +1,1 @@
+"""Official JMComic source extension."""

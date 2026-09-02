@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import sys
 from pathlib import Path
 
+import curl_cffi._wrapper
 import qtawesome
 from PIL import Image
 from PySide6.QtCore import QLibraryInfo
+
+from comicapng.plugins.client import PluginHostClient
+from comicapng.plugins.discovery import discover_plugins
 
 
 def _require(condition: bool, message: str) -> None:
@@ -57,6 +62,45 @@ def main() -> int:
 
     for filename in ("LICENSE", "NOTICE", "ComicAPNG.spec"):
         _require((project_root / filename).is_file(), f"Missing packaging file: {filename}")
+    third_party_license = project_root / "third-party/jmcomic-LICENSE.txt"
+    _require(third_party_license.is_file(), "Missing jmcomic license attribution")
+
+    plugin_ids = {
+        item.manifest.plugin_id
+        for item in discover_plugins()
+        if item.compatible and item.validation_error is None
+    }
+    required_plugins = {
+        "org.comicapng.source.jmcomic",
+        "org.comicapng.source.test",
+    }
+    _require(required_plugins.issubset(plugin_ids), "Bundled source manifests are invalid")
+    version = importlib.metadata.version("jmcomic")
+    version_parts = tuple(int(part) for part in version.split(".")[:3])
+    _require((2, 7, 5) <= version_parts < (2, 8, 0), f"Unsupported jmcomic version: {version}")
+    wrapper_path = Path(curl_cffi._wrapper.__file__ or "")
+    _require(wrapper_path.is_file(), "curl-cffi native wrapper is unavailable")
+
+    with PluginHostClient() as host:
+        listed = host.request("plugin.list", timeout=30.0)
+        listed_ids = {item["id"] for item in listed.get("plugins", [])}
+        _require(required_plugins.issubset(listed_ids), "Plugin Host did not list bundled sources")
+        health = host.request(
+            "plugin.health",
+            {"plugin_id": "org.comicapng.source.jmcomic"},
+            timeout=30.0,
+        )
+        _require(bool(health.get("available")), "JMComic source dependency is unavailable")
+        test_page = host.request(
+            "source.search",
+            {
+                "plugin_id": "org.comicapng.source.test",
+                "query": "fixture",
+                "page": 1,
+            },
+            timeout=30.0,
+        )
+        _require(bool(test_page.get("items")), "Test-source IPC smoke operation failed")
     return 0
 
 

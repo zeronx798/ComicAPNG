@@ -25,6 +25,9 @@ PLATFORM_PLUGIN_REQUIREMENTS = {
 REQUIRED_RESOURCES = {
     "license",
     "notice",
+    "third-party/jmcomic-license.txt",
+    "comicapng/extensions/jmcomic/manifest.json",
+    "comicapng/extensions/test_source/manifest.json",
     "comicapng/resources/i18n/en.json",
     "comicapng/resources/i18n/zh_cn.json",
     "comicapng/resources/icons/comicapng.png",
@@ -135,6 +138,14 @@ def _validate_resources(entries: set[str]) -> None:
         for name in entries
     ):
         raise RuntimeError("Frozen archive is missing qtawesome charmaps")
+    if not any(
+        name.startswith("jmcomic-") and name.endswith(".dist-info/metadata")
+        for name in entries
+    ):
+        raise RuntimeError("Frozen archive is missing jmcomic package metadata")
+    native_suffixes = (".dll", ".dylib", ".pyd", ".so")
+    if not any("curl_cffi" in name and name.endswith(native_suffixes) for name in entries):
+        raise RuntimeError("Frozen archive is missing curl-cffi native runtime components")
 
 
 def main() -> int:

@@ -18,8 +18,10 @@ from PySide6.QtWidgets import (
 )
 
 from comicapng import __version__
-from comicapng.core.models import DEFAULT_BODY_DURATION_MS, DEFAULT_COVER_DURATION_MS
+from comicapng.core.models import DEFAULT_BODY_DURATION_MS, DEFAULT_COVER_DURATION_MS, ComicBook
 from comicapng.i18n import I18n
+from comicapng.plugins.manager import PluginManager
+from comicapng.plugins.workspace import SourceWorkspaceStore
 from comicapng.services.settings import AppSettings
 from comicapng.services.thumbnail_cache import ThumbnailCache
 from comicapng.ui.dialogs.preferences_dialog import PreferencesDialog
@@ -27,16 +29,19 @@ from comicapng.ui.icons import accent_icon, icon
 from comicapng.ui.pages.creator_page import CreatorPage
 from comicapng.ui.pages.extractor_page import ExtractorPage
 from comicapng.ui.pages.reader_page import ReaderPage
+from comicapng.ui.pages.sources_page import SourcesPage
 
 
 class MainWindow(QMainWindow):
-    """One main window containing all three application workflows."""
+    """One main window containing all four application workflows."""
 
     def __init__(self, i18n: I18n, settings: AppSettings, parent=None) -> None:
         super().__init__(parent)
         self.i18n = i18n
         self.settings = settings
         self.thumbnail_cache = ThumbnailCache()
+        self.plugin_manager = PluginManager(settings)
+        self.source_workspaces = SourceWorkspaceStore()
         self._fullscreen = False
         self.setWindowTitle(i18n.tr("app.name"))
         self.setWindowIcon(accent_icon("book"))
@@ -71,6 +76,7 @@ class MainWindow(QMainWindow):
         self.navigation = QButtonGroup(self)
         self.navigation.setExclusive(True)
         destinations = (
+            ("sources", "nav.sources"),
             ("create", "nav.create"),
             ("extract", "nav.extract"),
             ("read", "nav.read"),
@@ -96,6 +102,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.sidebar)
 
         self.stack = QStackedWidget()
+        self.sources_page = SourcesPage(
+            self.i18n,
+            self.settings,
+            self.plugin_manager,
+            self.source_workspaces,
+        )
         self.creator_page = CreatorPage(
             self.i18n,
             self.settings,
@@ -107,14 +119,21 @@ class MainWindow(QMainWindow):
             self.settings,
             self.thumbnail_cache,
         )
+        self.stack.addWidget(self.sources_page)
         self.stack.addWidget(self.creator_page)
         self.stack.addWidget(self.extractor_page)
         self.stack.addWidget(self.reader_page)
         layout.addWidget(self.stack, 1)
         self.navigation.idClicked.connect(self.stack.setCurrentIndex)
 
-        for page in (self.creator_page, self.extractor_page, self.reader_page):
+        for page in (
+            self.sources_page,
+            self.creator_page,
+            self.extractor_page,
+            self.reader_page,
+        ):
             page.status_message.connect(self.statusBar().showMessage)
+        self.sources_page.open_in_create.connect(self._open_source_book)
         self.reader_page.fullscreen_toggle_requested.connect(self.toggle_fullscreen)
         self.reader_page.fullscreen_exit_requested.connect(self.exit_fullscreen)
         self.reader_page.book_opened.connect(self._set_book_title)
@@ -169,7 +188,12 @@ class MainWindow(QMainWindow):
         )
 
     def _show_preferences(self) -> None:
-        dialog = PreferencesDialog(self.i18n, self.settings, self)
+        dialog = PreferencesDialog(
+            self.i18n,
+            self.settings,
+            self,
+            plugin_manager=self.plugin_manager,
+        )
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
         thumbnail_size = self.settings.integer("creator/thumbnail_size", 170)
@@ -184,7 +208,35 @@ class MainWindow(QMainWindow):
         self.reader_page.viewer.set_background_color(
             str(self.settings.value("reader/background", "#15181d"))
         )
+        self.sources_page.include_cover.setChecked(
+            self.settings.boolean(
+                "plugins/org.comicapng.source.jmcomic/include_cover",
+                True,
+            )
+        )
+        self.sources_page.refresh_plugins()
         self.statusBar().showMessage(self.i18n.tr("preferences.saved"))
+
+    def _open_source_book(self, value: object) -> None:
+        if not isinstance(value, ComicBook):
+            return
+        if self.creator_page.book.pages:
+            answer = QMessageBox.question(
+                self,
+                self.i18n.tr("sources.replace_create_title"),
+                self.i18n.tr("sources.replace_create_message"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        if not self.creator_page.load_book(value):
+            self.statusBar().showMessage(self.i18n.tr("sources.create_busy"))
+            return
+        self.stack.setCurrentIndex(1)
+        creator_button = self.navigation.button(1)
+        if creator_button is not None:
+            creator_button.setChecked(True)
 
     def _set_book_title(self, filename: str) -> None:
         self.setWindowTitle(self.i18n.tr("app.book_title", filename=filename))
@@ -215,4 +267,8 @@ class MainWindow(QMainWindow):
         self.settings.sync()
         if self.reader_page.frame_cache is not None:
             self.reader_page.frame_cache.clear()
+        if self.sources_page._active_worker is not None:
+            self.sources_page._active_worker.cancel()
+        self.plugin_manager.close()
+        self.source_workspaces.close()
         super().closeEvent(event)
