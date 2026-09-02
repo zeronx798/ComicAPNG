@@ -35,16 +35,26 @@ class Worker(QRunnable):
     def cancel(self) -> None:
         self.cancel_event.set()
 
+    @staticmethod
+    def _emit(signal, *values: object) -> None:
+        try:
+            signal.emit(*values)
+        except RuntimeError:
+            LOGGER.debug("Worker signal receiver was already destroyed")
+
     @Slot()
     def run(self) -> None:
         try:
-            result = self.function(self.cancel_event, self.signals.progress.emit)
+            result = self.function(
+                self.cancel_event,
+                lambda current, total: self._emit(self.signals.progress, current, total),
+            )
         except OperationCancelledError:
-            self.signals.canceled.emit()
+            self._emit(self.signals.canceled)
         except Exception as exc:
             LOGGER.exception("Background operation failed")
-            self.signals.error.emit(type(exc).__name__, str(exc))
+            self._emit(self.signals.error, type(exc).__name__, str(exc))
         else:
-            self.signals.result.emit(result)
+            self._emit(self.signals.result, result)
         finally:
-            self.signals.finished.emit()
+            self._emit(self.signals.finished)

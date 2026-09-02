@@ -27,3 +27,15 @@ class OperationCancelledError(ComicApngError):
 
 class ResourceLimitError(ComicApngError):
     """Raised when an image exceeds safe decoder or memory limits."""
+
+
+class InvalidArchiveError(ComicApngError):
+    """Raised when a ZIP archive cannot be read safely."""
+
+
+class UnsafeArchiveError(InvalidArchiveError):
+    """Raised when an archive contains an unsafe entry name."""
+
+
+class ArchiveWriteError(ComicApngError):
+    """Raised when a ZIP archive cannot be written."""

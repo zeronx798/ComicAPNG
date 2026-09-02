@@ -2,3 +2,7 @@ ComicAPNG
 Copyright 2026 ComicAPNG contributors
 
 Licensed under the Apache License, Version 2.0.
+
+This product includes jmcomic, tested with version 2.7.5,
+Copyright (c) 2023 hect0x7, licensed under the MIT License.
+See third-party/jmcomic-LICENSE.txt.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 
 from PySide6.QtWidgets import (
@@ -41,6 +42,7 @@ class MetadataEditorDialog(QDialog):
         super().__init__(parent)
         self.i18n = i18n
         self._private_metadata = dict(metadata.private_metadata)
+        self._source_metadata = copy.deepcopy(metadata.source)
         self.result_metadata = metadata
         self.setWindowTitle(i18n.tr("metadata.title"))
         self.resize(760, 600)
@@ -50,6 +52,7 @@ class MetadataEditorDialog(QDialog):
         layout.addWidget(tabs)
         tabs.addTab(self._build_exif_tab(metadata), i18n.tr("metadata.exif"))
         tabs.addTab(self._build_text_tab(metadata), i18n.tr("metadata.png_text"))
+        tabs.addTab(self._build_source_tab(metadata), i18n.tr("metadata.source_information"))
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -129,6 +132,16 @@ class MetadataEditorDialog(QDialog):
         for key, value in metadata.text_fields.items():
             self._add_text_row(key, value)
         return tab
+
+    def _build_source_tab(self, metadata: ComicMetadata) -> QWidget:
+        view = QPlainTextEdit()
+        view.setReadOnly(True)
+        view.setPlainText(
+            json.dumps(metadata.source.to_dict(), ensure_ascii=False, indent=2)
+            if metadata.source is not None
+            else self.i18n.tr("metadata.none")
+        )
+        return view
 
     def _type_combo(self, selected: str = "text") -> QComboBox:
         combo = QComboBox()
@@ -216,6 +229,7 @@ class MetadataEditorDialog(QDialog):
                 exif_fields=self._collect_exif(),
                 text_fields=self._collect_text(),
                 private_metadata=self._private_metadata,
+                source=self._source_metadata,
             )
         except InvalidMetadataError as exc:
             box = QMessageBox(self)
@@ -263,6 +277,15 @@ class MetadataViewerDialog(QDialog):
             else i18n.tr("metadata.none")
         )
         tabs.addTab(private_view, i18n.tr("metadata.private"))
+
+        source_view = QPlainTextEdit()
+        source_view.setReadOnly(True)
+        source_view.setPlainText(
+            json.dumps(metadata.source.to_dict(), ensure_ascii=False, indent=2)
+            if metadata.source is not None
+            else i18n.tr("metadata.none")
+        )
+        tabs.addTab(source_view, i18n.tr("metadata.source_information"))
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText(i18n.tr("common.close"))

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -13,12 +15,75 @@ DEFAULT_COVER_DURATION_MS = 10_000
 DEFAULT_BODY_DURATION_MS = 5_000
 
 
+def _validate_json_value(value: Any, *, depth: int = 0) -> None:
+    if depth > 20:
+        raise ValueError("Source metadata is nested too deeply")
+    if value is None or isinstance(value, (str, bool, int)):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("Source metadata numbers must be finite")
+        return
+    if isinstance(value, list):
+        for item in value:
+            _validate_json_value(item, depth=depth + 1)
+        return
+    if isinstance(value, dict):
+        if not all(isinstance(key, str) for key in value):
+            raise ValueError("Source metadata object keys must be strings")
+        for item in value.values():
+            _validate_json_value(item, depth=depth + 1)
+        return
+    raise ValueError("Source metadata must contain only JSON values")
+
+
 @dataclass(slots=True)
 class ExifValue:
     """A typed EXIF value that can be validated before serialization."""
 
     value_type: ExifValueType
     value: str
+
+
+@dataclass(slots=True)
+class SourceMetadata:
+    """JSON-only information supplied by an optional source plugin."""
+
+    plugin_id: str
+    resource_id: str
+    data: dict[str, Any] = field(default_factory=dict)
+
+    def validate(self) -> None:
+        if not self.plugin_id.strip():
+            raise ValueError("Source plugin ID must not be empty")
+        if not self.resource_id.strip():
+            raise ValueError("Source resource ID must not be empty")
+        _validate_json_value(self.data)
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        result: dict[str, Any] = {
+            "plugin_id": self.plugin_id,
+            "resource_id": self.resource_id,
+        }
+        if self.data:
+            result["data"] = self.data
+        return result
+
+    @classmethod
+    def from_dict(cls, value: object) -> SourceMetadata:
+        if not isinstance(value, dict):
+            raise ValueError("Source metadata must be an object")
+        plugin_id = value.get("plugin_id")
+        resource_id = value.get("resource_id")
+        data = value.get("data", {})
+        if not isinstance(plugin_id, str) or not isinstance(resource_id, str):
+            raise ValueError("Source metadata identifiers must be strings")
+        if not isinstance(data, dict):
+            raise ValueError("Source metadata data must be an object")
+        result = cls(plugin_id=plugin_id, resource_id=resource_id, data=dict(data))
+        result.validate()
+        return result
 
 
 @dataclass(slots=True)
@@ -32,6 +97,7 @@ class ComicPage:
     duration_ms: int | None = None
     is_cover: bool = False
     page_id: str = field(default_factory=lambda: uuid4().hex)
+    source_metadata: dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
         if self.source_width <= 0 or self.source_height <= 0:
@@ -40,15 +106,17 @@ class ComicPage:
             raise ValueError("Page duration must be positive")
         if self.source_path is None and self.frame_index is None:
             raise ValueError("Page must have a source path or frame index")
+        _validate_json_value(self.source_metadata)
 
 
 @dataclass(slots=True)
 class ComicMetadata:
-    """Independent EXIF, PNG text, and private metadata collections."""
+    """Independent EXIF, PNG text, private, and source metadata collections."""
 
     exif_fields: dict[int, ExifValue] = field(default_factory=dict)
     text_fields: dict[str, str] = field(default_factory=dict)
     private_metadata: dict[str, Any] = field(default_factory=dict)
+    source: SourceMetadata | None = None
 
 
 @dataclass(slots=True)
@@ -70,6 +138,8 @@ class ComicBook:
             raise ValueError("Frame durations must be positive")
         for page in self.pages:
             page.validate()
+        if self.metadata.source is not None:
+            self.metadata.source.validate()
         if sum(page.is_cover for page in self.pages) > 1:
             raise ValueError("Comic book has more than one cover")
 
@@ -80,6 +150,38 @@ class ComicBook:
             found = found or page.is_cover
         if not found:
             raise ValueError("Cover page was not found")
+
+    def move_page(self, source_index: int, target_index: int) -> bool:
+        """Move one page to its final index and preserve the page object."""
+        if not 0 <= target_index < len(self.pages):
+            raise IndexError("Target page index is out of range")
+        return self.move_pages((source_index,), target_index)
+
+    def move_pages(self, source_indices: Iterable[int], target_index: int) -> bool:
+        """Move pages as an ordered block to a final insertion index.
+
+        ``target_index`` is interpreted after the selected pages are removed. It
+        is therefore the final index of the first page in the moved block.
+        """
+        indices = sorted(set(source_indices))
+        if not indices:
+            raise ValueError("At least one source page index is required")
+        if indices[0] < 0 or indices[-1] >= len(self.pages):
+            raise IndexError("Source page index is out of range")
+
+        moved_indexes = set(indices)
+        moved = [self.pages[index] for index in indices]
+        remaining = [
+            page for index, page in enumerate(self.pages) if index not in moved_indexes
+        ]
+        if not 0 <= target_index <= len(remaining):
+            raise IndexError("Target page index is out of range")
+
+        reordered = [*remaining[:target_index], *moved, *remaining[target_index:]]
+        if all(before is after for before, after in zip(self.pages, reordered, strict=True)):
+            return False
+        self.pages[:] = reordered
+        return True
 
     def export_pages(self) -> list[ComicPage]:
         """Return pages with the cover first and without duplication."""
