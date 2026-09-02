@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from comicapng.core.apng_writer import write_apng
 from comicapng.core.exceptions import OperationCancelledError
 from comicapng.core.models import DEFAULT_BODY_DURATION_MS, DEFAULT_COVER_DURATION_MS, ComicBook
+from comicapng.core.zip_archive import write_zip
 from comicapng.i18n import I18n
 from comicapng.plugins.api import (
     MaterializedChapter,
@@ -243,10 +244,12 @@ class SourcesPage(QWidget):
         self.open_create_button = QPushButton(self.i18n.tr("sources.open_in_create"))
         self.open_create_button.setObjectName("primary")
         self.pack_button = QPushButton(self.i18n.tr("sources.download_and_pack"))
+        self.zip_button = QPushButton(icon("archive"), self.i18n.tr("sources.export_zip"))
         actions.addWidget(self.download_button)
         actions.addWidget(self.download_all_button)
         actions.addStretch()
         actions.addWidget(self.open_create_button)
+        actions.addWidget(self.zip_button)
         actions.addWidget(self.pack_button)
         layout.addLayout(actions)
 
@@ -257,6 +260,7 @@ class SourcesPage(QWidget):
         self.download_button.clicked.connect(self._download_selected)
         self.download_all_button.clicked.connect(self._download_all)
         self.open_create_button.clicked.connect(self._open_selected_in_create)
+        self.zip_button.clicked.connect(self._export_zip)
         self.pack_button.clicked.connect(self._download_and_pack)
         return page
 
@@ -599,6 +603,30 @@ class SourcesPage(QWidget):
             return
         self._start_source_workflow("pack", chapters, destination, pack_mode=mode)
 
+    def _export_zip(self) -> None:
+        chapters = self._selected_chapters()
+        comic = self.current_comic
+        if comic is None or not chapters:
+            return
+        default = self.settings.last_directory("source_zip") / f"{safe_filename(comic.title)}.zip"
+        selected, _filter = QFileDialog.getSaveFileName(
+            self,
+            self.i18n.tr("sources.export_zip"),
+            str(default),
+            self.i18n.tr("files.zip_filter"),
+        )
+        if not selected:
+            return
+        destination = Path(selected)
+        if destination.suffix.casefold() != ".zip":
+            destination = destination.with_suffix(".zip")
+        if destination.exists() and not self._confirm_overwrite(destination):
+            return
+        self.settings.set_last_directory("source_zip", destination)
+        if not self._confirm_operation(chapters, destination, "sources.zip_behavior"):
+            return
+        self._start_source_workflow("zip", chapters, destination)
+
     def _confirm_operation(
         self,
         chapters: tuple[SourceChapter, ...],
@@ -661,7 +689,7 @@ class SourcesPage(QWidget):
         )
         task_id = uuid4().hex
         workspace: Path | None = None
-        if workflow in {"create", "pack"}:
+        if workflow in {"create", "pack", "zip"}:
             workspace = self.workspace_store.create(plugin_id, task_id)
             materialization_root = workspace
         else:
@@ -714,6 +742,31 @@ class SourcesPage(QWidget):
                         materialization_root,
                         workspace=workspace,
                         book=book,
+                        chapter_count=len(materialized),
+                    )
+
+                if workflow == "zip":
+                    if destination is None:
+                        raise ValueError("ZIP destination is missing")
+                    book = comic_book_from_source(
+                        comic,
+                        source_name,
+                        tuple(materialized),
+                        include_cover=include_cover,
+                        cover_duration_ms=cover_duration,
+                        body_duration_ms=body_duration,
+                    )
+                    write_zip(
+                        book,
+                        destination,
+                        overwrite=destination.exists(),
+                        cancel_event=cancel_event,
+                    )
+                    return SourceWorkflowResult(
+                        workflow,
+                        destination,
+                        workspace=workspace,
+                        outputs=(destination,),
                         chapter_count=len(materialized),
                     )
 
@@ -816,6 +869,15 @@ class SourcesPage(QWidget):
             )
             self.status_message.emit(
                 self.i18n.tr("sources.pack_complete_status", count=len(result.outputs))
+            )
+        elif result.workflow == "zip":
+            QMessageBox.information(
+                self,
+                self.i18n.tr("sources.zip_complete_title"),
+                self.i18n.tr("sources.zip_complete", path=str(result.destination)),
+            )
+            self.status_message.emit(
+                self.i18n.tr("sources.zip_complete_status")
             )
         else:
             QMessageBox.information(
@@ -932,6 +994,7 @@ class SourcesPage(QWidget):
         for button in (
             self.download_button,
             self.open_create_button,
+            self.zip_button,
             self.pack_button,
         ):
             button.setEnabled(selected_chapters and not busy)

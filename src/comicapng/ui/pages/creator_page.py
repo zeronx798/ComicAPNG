@@ -1,13 +1,16 @@
-"""Create APNG comic workflow."""
+"""Create and edit APNG/ZIP documents through one page model."""
 
 from __future__ import annotations
 
 import copy
+import logging
 from pathlib import Path
 from threading import Event
+from uuid import uuid4
 
+from platformdirs import user_cache_path
 from PySide6.QtCore import QItemSelectionModel, QSize, Qt, QThreadPool, Signal
-from PySide6.QtGui import QBrush, QColor, QIcon, QKeySequence, QShortcut
+from PySide6.QtGui import QBrush, QCloseEvent, QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -22,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from comicapng.core.apng_importer import import_apng
 from comicapng.core.apng_writer import write_apng
 from comicapng.core.exceptions import (
     InvalidImageError,
@@ -35,9 +39,15 @@ from comicapng.core.models import (
     ComicBook,
     ComicPage,
 )
+from comicapng.core.zip_archive import ZipImportResult, ZipMetadataStatus, import_zip, write_zip
 from comicapng.i18n import I18n
+from comicapng.plugins.workspace import WorkspaceStore
 from comicapng.services.settings import AppSettings
 from comicapng.services.thumbnail_cache import ThumbnailCache
+from comicapng.ui.dialogs.archive_mismatch_dialog import (
+    ArchiveMismatchChoice,
+    ArchiveMismatchDialog,
+)
 from comicapng.ui.dialogs.error_dialog import show_error
 from comicapng.ui.dialogs.metadata_dialog import MetadataEditorDialog
 from comicapng.ui.icons import danger_icon, icon
@@ -45,6 +55,8 @@ from comicapng.ui.theme import SELECTION
 from comicapng.ui.widgets.duration_spin_box import DurationSpinBox
 from comicapng.ui.widgets.thumbnail_view import ThumbnailView
 from comicapng.ui.workers import Worker
+
+LOGGER = logging.getLogger(__name__)
 
 
 class CreatorPage(QWidget):
@@ -55,12 +67,20 @@ class CreatorPage(QWidget):
         i18n: I18n,
         settings: AppSettings,
         thumbnail_cache: ThumbnailCache,
+        workspace_store: WorkspaceStore | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.i18n = i18n
         self.settings = settings
         self.thumbnail_cache = thumbnail_cache
+        self.workspace_store = workspace_store or WorkspaceStore(
+            user_cache_path("ComicAPNG", appauthor=False) / "imports"
+        )
+        self._owns_workspace_store = workspace_store is None
+        self._document_workspace: Path | None = None
+        self._pending_document_import: tuple[object, Path] | None = None
+        self._closing = False
         self.thread_pool = QThreadPool.globalInstance()
         self.book = ComicBook(
             cover_duration_ms=settings.integer(
@@ -82,19 +102,29 @@ class CreatorPage(QWidget):
         heading.setObjectName("heading")
         root.addWidget(heading)
 
-        toolbar = QHBoxLayout()
-        self.import_files_button = self._tool_button("file", "creator.import_files")
+        import_toolbar = QHBoxLayout()
+        self.import_files_button = self._tool_button("add", "creator.import_files")
         self.import_folder_button = self._tool_button("folder", "creator.import_folder")
+        self.import_apng_button = self._tool_button("import", "creator.import_apng")
+        self.import_zip_button = self._tool_button("archive", "creator.import_zip")
+        import_toolbar.addWidget(self.import_files_button)
+        import_toolbar.addWidget(self.import_folder_button)
+        import_toolbar.addWidget(self.import_apng_button)
+        import_toolbar.addWidget(self.import_zip_button)
+        import_toolbar.addStretch()
+        root.addLayout(import_toolbar)
+
+        toolbar = QHBoxLayout()
         self.remove_button = self._tool_button("delete", "creator.remove", danger=True)
         self.cover_button = self._tool_button("cover", "creator.set_cover")
         self.metadata_button = self._tool_button("metadata", "metadata.title")
         self.export_button = self._tool_button("export", "creator.export", primary=True)
-        toolbar.addWidget(self.import_files_button)
-        toolbar.addWidget(self.import_folder_button)
         toolbar.addWidget(self.remove_button)
         toolbar.addWidget(self.cover_button)
         toolbar.addWidget(self.metadata_button)
         toolbar.addStretch()
+        self.export_zip_button = self._tool_button("archive", "creator.export_zip")
+        toolbar.addWidget(self.export_zip_button)
         toolbar.addWidget(self.export_button)
         root.addLayout(toolbar)
 
@@ -148,10 +178,13 @@ class CreatorPage(QWidget):
 
         self.import_files_button.clicked.connect(self._choose_files)
         self.import_folder_button.clicked.connect(self._choose_folder)
+        self.import_apng_button.clicked.connect(self._choose_apng_import)
+        self.import_zip_button.clicked.connect(self._choose_zip_import)
         self.remove_button.clicked.connect(self._remove_selected)
         self.cover_button.clicked.connect(self._set_selected_cover)
         self.metadata_button.clicked.connect(self._edit_metadata)
         self.export_button.clicked.connect(self._choose_export)
+        self.export_zip_button.clicked.connect(self._choose_zip_export)
 
     def _tool_button(
         self,
@@ -203,6 +236,172 @@ class CreatorPage(QWidget):
             self.settings.set_last_directory("creator_import", directory)
             self.import_entries([directory])
 
+    def _choose_apng_import(self) -> None:
+        selected, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            self.i18n.tr("creator.import_apng"),
+            str(self.settings.last_directory("creator_document_import")),
+            self.i18n.tr("files.apng_filter"),
+        )
+        if not selected:
+            return
+        path = Path(selected)
+        self.settings.set_last_directory("creator_document_import", path)
+        self._start_document_import(path, "apng")
+
+    def _choose_zip_import(self) -> None:
+        selected, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            self.i18n.tr("creator.import_zip"),
+            str(self.settings.last_directory("creator_document_import")),
+            self.i18n.tr("files.zip_filter"),
+        )
+        if not selected:
+            return
+        path = Path(selected)
+        self.settings.set_last_directory("creator_document_import", path)
+        self._start_document_import(path, "zip")
+
+    def _confirm_document_replace(self) -> bool:
+        if not self.book.pages:
+            return True
+        answer = QMessageBox.question(
+            self,
+            self.i18n.tr("creator.replace_document_title"),
+            self.i18n.tr("creator.replace_document_message"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _start_document_import(self, path: Path, kind: str) -> None:
+        if self._active_worker is not None or not self._confirm_document_replace():
+            return
+        workspace = self.workspace_store.create(kind, uuid4().hex)
+
+        def task(cancel_event: Event, progress):
+            if kind == "apng":
+                return import_apng(
+                    path,
+                    workspace,
+                    progress=progress,
+                    cancel_event=cancel_event,
+                )
+            return import_zip(
+                path,
+                workspace,
+                progress=progress,
+                cancel_event=cancel_event,
+            )
+
+        worker = Worker(task)
+        self._active_worker = worker
+        dialog = self._show_progress("creator.importing_document", 0, worker)
+        worker.signals.result.connect(
+            lambda result: self._store_document_import_result(result, workspace)
+        )
+        worker.signals.error.connect(
+            lambda error_type, details: self._document_import_error(
+                workspace,
+                error_type,
+                details,
+            )
+        )
+        worker.signals.canceled.connect(
+            lambda: self._document_import_canceled(workspace)
+        )
+        worker.signals.finished.connect(self._document_import_finished)
+        worker.signals.progress.connect(
+            lambda current, total: self._update_progress(
+                dialog,
+                label_key="creator.import_document_progress",
+                current=current,
+                total=total,
+            )
+        )
+        self.thread_pool.start(worker)
+
+    def _store_document_import_result(self, result: object, workspace: Path) -> None:
+        if self._closing:
+            self._cleanup_workspace(workspace)
+            return
+        self._pending_document_import = (result, workspace)
+
+    def _cleanup_workspace(self, workspace: Path) -> None:
+        try:
+            self.workspace_store.cleanup(workspace)
+        except (OSError, ValueError):
+            LOGGER.warning("Could not clean an import workspace", exc_info=True)
+
+    def _document_import_error(
+        self,
+        workspace: Path,
+        error_type: str,
+        details: str,
+    ) -> None:
+        self._cleanup_workspace(workspace)
+        if not self._closing:
+            self._worker_error(error_type, details)
+
+    def _document_import_canceled(self, workspace: Path) -> None:
+        self._cleanup_workspace(workspace)
+        if not self._closing:
+            self.status_message.emit(self.i18n.tr("common.cancelled"))
+
+    def _document_import_finished(self) -> None:
+        self._operation_finished()
+        if not self._closing and self._pending_document_import is not None:
+            self._resolve_document_import()
+
+    def _resolve_document_import(self) -> None:
+        pending = self._pending_document_import
+        self._pending_document_import = None
+        if pending is None:
+            return
+        result, workspace = pending
+        book: ComicBook | None = None
+        if isinstance(result, ComicBook):
+            book = result
+        elif isinstance(result, ZipImportResult):
+            book = self._resolve_zip_import(result)
+        if book is None:
+            self._cleanup_workspace(workspace)
+            return
+        if not self.load_book(book, workspace=workspace):
+            self._cleanup_workspace(workspace)
+            self.status_message.emit(self.i18n.tr("creator.document_busy"))
+
+    def _resolve_zip_import(self, result: ZipImportResult) -> ComicBook | None:
+        if result.metadata_status == ZipMetadataStatus.MISMATCH:
+            if result.differences is None:
+                return None
+            dialog = ArchiveMismatchDialog(self.i18n, result.differences, self)
+            if dialog.exec() != dialog.DialogCode.Accepted:
+                return None
+            if dialog.choice == ArchiveMismatchChoice.REMAINING_METADATA:
+                return result.book_with_remaining_metadata()
+            if dialog.choice == ArchiveMismatchChoice.IMAGES_ONLY:
+                return result.book
+            return None
+        if result.metadata_status == ZipMetadataStatus.MALFORMED:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle(self.i18n.tr("archive.metadata_unreadable_title"))
+            box.setText(self.i18n.tr("archive.metadata_unreadable_message"))
+            if result.metadata_error:
+                box.setDetailedText(result.metadata_error)
+            import_button = box.addButton(
+                self.i18n.tr("archive.import_without_metadata"),
+                QMessageBox.ButtonRole.AcceptRole,
+            )
+            box.addButton(
+                self.i18n.tr("common.cancel"),
+                QMessageBox.ButtonRole.RejectRole,
+            )
+            box.exec()
+            return result.book if box.clickedButton() is import_button else None
+        return result.book
+
     def import_entries(self, entries: list[Path]) -> None:
         if self._active_worker is not None:
             return
@@ -252,8 +451,8 @@ class CreatorPage(QWidget):
         )
         self.thread_pool.start(worker)
 
-    def load_book(self, book: ComicBook) -> bool:
-        """Replace the editor with a normal ComicBook prepared by a source workflow."""
+    def load_book(self, book: ComicBook, *, workspace: Path | None = None) -> bool:
+        """Replace the editor with a normal image-backed ComicBook."""
         if self._active_worker is not None:
             return False
         source_paths = [page.source_path for page in book.pages]
@@ -275,15 +474,24 @@ class CreatorPage(QWidget):
                     )
                 )
                 progress(index + 1, len(source_paths))
-            return book, thumbnails
+            return book, thumbnails, workspace
 
         worker = Worker(task)
         self._active_worker = worker
         dialog = self._show_progress("creator.loading_source", len(book.pages), worker)
         worker.signals.result.connect(self._finish_source_book_load)
-        worker.signals.error.connect(self._worker_error)
+        if workspace is None:
+            worker.signals.error.connect(self._worker_error)
+        else:
+            worker.signals.error.connect(
+                lambda error_type, details: self._book_load_error(
+                    workspace,
+                    error_type,
+                    details,
+                )
+            )
         worker.signals.canceled.connect(
-            lambda: self.status_message.emit(self.i18n.tr("common.cancelled"))
+            lambda: self._book_load_canceled(workspace)
         )
         worker.signals.finished.connect(self._operation_finished)
         worker.signals.progress.connect(
@@ -298,9 +506,21 @@ class CreatorPage(QWidget):
         return True
 
     def _finish_source_book_load(self, result: object) -> None:
-        book, thumbnails = result  # type: ignore[misc]
+        values = tuple(result)  # type: ignore[arg-type]
+        if len(values) == 2:
+            book, thumbnails = values
+            workspace = None
+        else:
+            book, thumbnails, workspace = values
         if not isinstance(book, ComicBook):
             return
+        if workspace is not None and not isinstance(workspace, Path):
+            return
+        if self._closing:
+            if workspace is not None:
+                self._cleanup_workspace(workspace)
+            return
+        self._replace_document_workspace(workspace)
         self.page_list.clear()
         self.book = book
         for page, thumbnail in zip(book.pages, thumbnails, strict=True):
@@ -311,7 +531,31 @@ class CreatorPage(QWidget):
         if direction_index >= 0:
             self.direction_combo.setCurrentIndex(direction_index)
         self._refresh_items()
-        self.status_message.emit(self.i18n.tr("creator.source_loaded", count=len(book.pages)))
+        self.status_message.emit(self.i18n.tr("creator.document_loaded", count=len(book.pages)))
+
+    def _replace_document_workspace(self, workspace: Path | None) -> None:
+        previous = self._document_workspace
+        if workspace is not None:
+            self.workspace_store.retain(workspace)
+        self._document_workspace = workspace
+        if previous is not None and previous != workspace:
+            self._cleanup_workspace(previous)
+
+    def _book_load_error(
+        self,
+        workspace: Path,
+        error_type: str,
+        details: str,
+    ) -> None:
+        self._cleanup_workspace(workspace)
+        if not self._closing:
+            self._worker_error(error_type, details)
+
+    def _book_load_canceled(self, workspace: Path | None) -> None:
+        if workspace is not None:
+            self._cleanup_workspace(workspace)
+        if not self._closing:
+            self.status_message.emit(self.i18n.tr("common.cancelled"))
 
     def _finish_import(self, result: object) -> None:
         imported, errors = result  # type: ignore[misc]
@@ -500,6 +744,26 @@ class CreatorPage(QWidget):
             self.book.metadata = dialog.result_metadata
             self.status_message.emit(self.i18n.tr("metadata.saved"))
 
+    def _confirm_export_destination(self, output: Path) -> bool | None:
+        if not output.exists():
+            return False
+        answer = QMessageBox.question(
+            self,
+            self.i18n.tr("common.overwrite_title"),
+            self.i18n.tr("common.overwrite_message", path=str(output)),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return True if answer == QMessageBox.StandardButton.Yes else None
+
+    def _export_book_snapshot(self) -> ComicBook:
+        self.book.cover_duration_ms = self.cover_duration.milliseconds()
+        self.book.body_duration_ms = self.body_duration.milliseconds()
+        self.book.reading_direction = str(self.direction_combo.currentData())  # type: ignore[assignment]
+        self.settings.set_value("creator/cover_duration", self.book.cover_duration_ms)
+        self.settings.set_value("creator/body_duration", self.book.body_duration_ms)
+        return copy.deepcopy(self.book)
+
     def _choose_export(self) -> None:
         if not self.book.pages or self._active_worker is not None:
             return
@@ -515,25 +779,11 @@ class CreatorPage(QWidget):
         output = Path(selected)
         if output.suffix.casefold() not in {".png", ".apng"}:
             output = output.with_suffix(".apng")
-        overwrite = False
-        if output.exists():
-            answer = QMessageBox.question(
-                self,
-                self.i18n.tr("common.overwrite_title"),
-                self.i18n.tr("common.overwrite_message", path=str(output)),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-            overwrite = True
+        overwrite = self._confirm_export_destination(output)
+        if overwrite is None:
+            return
         self.settings.set_last_directory("creator_export", output)
-        self.book.cover_duration_ms = self.cover_duration.milliseconds()
-        self.book.body_duration_ms = self.body_duration.milliseconds()
-        self.book.reading_direction = str(self.direction_combo.currentData())  # type: ignore[assignment]
-        self.settings.set_value("creator/cover_duration", self.book.cover_duration_ms)
-        self.settings.set_value("creator/body_duration", self.book.body_duration_ms)
-        export_book = copy.deepcopy(self.book)
+        export_book = self._export_book_snapshot()
 
         def task(cancel_event: Event, progress):
             return write_apng(
@@ -560,7 +810,58 @@ class CreatorPage(QWidget):
         )
         self.thread_pool.start(worker)
 
+    def _choose_zip_export(self) -> None:
+        if not self.book.pages or self._active_worker is not None:
+            return
+        default_path = self.settings.last_directory("creator_export") / "document.zip"
+        selected, _filter = QFileDialog.getSaveFileName(
+            self,
+            self.i18n.tr("creator.export_zip"),
+            str(default_path),
+            self.i18n.tr("files.zip_filter"),
+        )
+        if not selected:
+            return
+        output = Path(selected)
+        if output.suffix.casefold() != ".zip":
+            output = output.with_suffix(".zip")
+        overwrite = self._confirm_export_destination(output)
+        if overwrite is None:
+            return
+        self.settings.set_last_directory("creator_export", output)
+        export_book = self._export_book_snapshot()
+
+        def task(cancel_event: Event, progress):
+            return write_zip(
+                export_book,
+                output,
+                overwrite=overwrite,
+                progress=progress,
+                cancel_event=cancel_event,
+            )
+
+        worker = Worker(task)
+        self._active_worker = worker
+        dialog = self._show_progress("creator.exporting_zip", len(export_book.pages), worker)
+        worker.signals.result.connect(self._export_complete)
+        worker.signals.error.connect(self._worker_error)
+        worker.signals.canceled.connect(
+            lambda: self.status_message.emit(self.i18n.tr("common.cancelled"))
+        )
+        worker.signals.finished.connect(self._operation_finished)
+        worker.signals.progress.connect(
+            lambda current, total: self._update_progress(
+                dialog,
+                label_key="creator.export_zip_progress",
+                current=current,
+                total=total,
+            )
+        )
+        self.thread_pool.start(worker)
+
     def _export_complete(self, result: object) -> None:
+        if self._closing:
+            return
         output = Path(result)
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Information)
@@ -596,10 +897,14 @@ class CreatorPage(QWidget):
         current: int,
         total: int,
     ) -> None:
+        if total > 0 and dialog.maximum() != total:
+            dialog.setMaximum(total)
         dialog.setValue(current)
         dialog.setLabelText(self.i18n.tr(label_key, current=current, total=total))
 
     def _worker_error(self, _error_type: str, details: str) -> None:
+        if self._closing:
+            return
         show_error(self, self.i18n, "common.error_title", "common.operation_failed", details)
 
     def _operation_finished(self) -> None:
@@ -614,6 +919,8 @@ class CreatorPage(QWidget):
     def _set_busy(self, busy: bool) -> None:
         self.import_files_button.setEnabled(not busy)
         self.import_folder_button.setEnabled(not busy)
+        self.import_apng_button.setEnabled(not busy)
+        self.import_zip_button.setEnabled(not busy)
         self.page_list.setEnabled(not busy)
 
     def _update_actions(self) -> None:
@@ -623,3 +930,20 @@ class CreatorPage(QWidget):
         self.cover_button.setEnabled(selected_count == 1 and not busy)
         self.metadata_button.setEnabled(not busy)
         self.export_button.setEnabled(bool(self.book.pages) and not busy)
+        self.export_zip_button.setEnabled(bool(self.book.pages) and not busy)
+
+    def prepare_to_close(self) -> None:
+        self._closing = True
+        if self._active_worker is not None:
+            self._active_worker.cancel()
+        if self._pending_document_import is not None:
+            _result, workspace = self._pending_document_import
+            self._pending_document_import = None
+            self._cleanup_workspace(workspace)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self.prepare_to_close()
+        if self._owns_workspace_store:
+            self.thread_pool.waitForDone(5000)
+            self.workspace_store.close()
+        super().closeEvent(event)

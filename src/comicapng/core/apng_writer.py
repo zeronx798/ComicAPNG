@@ -115,12 +115,15 @@ def _private_document(
     durations: list[int],
 ) -> dict[str, object]:
     document = dict(book.metadata.private_metadata)
+    document.pop("source", None)
     document.update(
         {
             "format": PRIVATE_FORMAT_NAME,
             "version": PRIVATE_SCHEMA_VERSION,
             "cover_index": 0,
             "reading_direction": book.reading_direction,
+            "cover_duration_ms": book.cover_duration_ms,
+            "body_duration_ms": book.body_duration_ms,
             "pages": [
                 {
                     "source_width": layout.source_width,
@@ -130,11 +133,14 @@ def _private_document(
                     "offset_x": layout.offset_x,
                     "offset_y": layout.offset_y,
                     "duration_ms": duration,
+                    **({"source": page.source_metadata} if page.source_metadata else {}),
                 }
-                for _page, layout, duration in zip(pages, layouts, durations, strict=True)
+                for page, layout, duration in zip(pages, layouts, durations, strict=True)
             ],
         }
     )
+    if book.metadata.source is not None:
+        document["source"] = book.metadata.source.to_dict()
     return document
 
 

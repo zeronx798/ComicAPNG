@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from platformdirs import user_log_path
 from PySide6.QtCore import QLocale
@@ -62,8 +63,12 @@ def main() -> int:
     application, window = create_application(arguments)
     if smoke_test:
         from curl_cffi import Curl
+        from PIL import Image
 
-        from comicapng.core.models import ComicBook, ComicPage
+        from comicapng.core.apng_importer import import_apng
+        from comicapng.core.apng_writer import write_apng
+        from comicapng.core.models import ComicBook, ComicMetadata, ComicPage, SourceMetadata
+        from comicapng.core.zip_archive import ZipMetadataStatus, import_zip, write_zip
         from comicapng.plugins.client import PluginHostClient
 
         for locale_name in I18n.SUPPORTED_LOCALES:
@@ -99,6 +104,30 @@ def main() -> int:
         reorder_menu.deleteLater()
         window.creator_page.page_list.clear()
         window.creator_page.book = ComicBook()
+        with TemporaryDirectory(prefix="comicapng-frozen-smoke-") as temporary:
+            root = Path(temporary)
+            image_path = root / "page.jpg"
+            Image.new("RGB", (4, 6), (20, 40, 80)).save(image_path, format="JPEG")
+            document_book = ComicBook(
+                pages=[ComicPage(image_path, None, 4, 6, duration_ms=250, is_cover=True)],
+                metadata=ComicMetadata(
+                    source=SourceMetadata(
+                        "org.comicapng.source.test",
+                        "frozen-smoke",
+                        {"tags": ["offline"]},
+                    )
+                ),
+            )
+            archive_path = write_zip(document_book, root / "document.zip")
+            archive_result = import_zip(archive_path, root / "zip-workspace")
+            if archive_result.metadata_status != ZipMetadataStatus.VALID:
+                raise RuntimeError("Packaged ZIP round trip failed")
+            if archive_result.book.metadata.source is None:
+                raise RuntimeError("Packaged source metadata round trip failed")
+            apng_path = write_apng(archive_result.book, root / "document.apng")
+            imported_book = import_apng(apng_path, root / "apng-workspace")
+            if len(imported_book.pages) != 1 or imported_book.metadata.source is None:
+                raise RuntimeError("Packaged APNG import failed")
         curl_runtime = Curl()
         curl_runtime.close()
         with PluginHostClient() as host:
@@ -131,5 +160,8 @@ def main() -> int:
         application.processEvents()
         window.close()
         return 0
-    window.show()
+    if window.restore_maximized:
+        window.showMaximized()
+    else:
+        window.show()
     return application.exec()

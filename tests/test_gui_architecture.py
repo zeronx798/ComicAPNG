@@ -28,6 +28,11 @@ def test_one_main_window_contains_all_workflow_pages(tmp_path: Path) -> None:
         assert isinstance(window.stack.widget(2), ExtractorPage)
         assert isinstance(window.stack.widget(3), ReaderPage)
         assert window.windowTitle() == "ComicAPNG"
+        assert window.creator_page.import_apng_button.text() == "Import APNG"
+        assert window.creator_page.import_zip_button.text() == "Import ZIP"
+        assert window.creator_page.export_zip_button.text() == "Export ZIP"
+        assert window.sources_page.zip_button.text() == "Export ZIP"
+        assert not window.sources_page.zip_button.icon().isNull()
     finally:
         window.close()
         application.processEvents()

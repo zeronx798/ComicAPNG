@@ -13,11 +13,11 @@ from typing import Any
 from PIL import Image, TiffImagePlugin
 
 from .exceptions import InvalidMetadataError
-from .models import ComicMetadata, ExifValue
+from .models import ComicMetadata, ExifValue, SourceMetadata
 
 PRIVATE_METADATA_KEY = "ComicAPNG.Metadata"
 PRIVATE_FORMAT_NAME = "ComicAPNG"
-PRIVATE_SCHEMA_VERSION = 1
+PRIVATE_SCHEMA_VERSION = 2
 MAX_METADATA_FIELDS = 128
 MAX_TEXT_VALUE_BYTES = 1_048_576
 MAX_METADATA_TOTAL_BYTES = 4_194_304
@@ -85,6 +85,7 @@ def encode_private_metadata(value: Mapping[str, Any]) -> str:
             ensure_ascii=True,
             separators=(",", ":"),
             sort_keys=True,
+            allow_nan=False,
         )
     except (TypeError, ValueError) as exc:
         raise InvalidMetadataError("ComicAPNG metadata is not JSON serializable") from exc
@@ -204,8 +205,18 @@ def read_metadata(image: Image.Image) -> ComicMetadata:
                 private_metadata = decode_private_metadata(value)
             elif len(text_fields) < MAX_METADATA_FIELDS:
                 text_fields[key] = value
+    source: SourceMetadata | None = None
+    try:
+        if (
+            private_metadata.get("format") == PRIVATE_FORMAT_NAME
+            and "source" in private_metadata
+        ):
+            source = SourceMetadata.from_dict(private_metadata["source"])
+    except ValueError:
+        source = None
     return ComicMetadata(
         exif_fields=exif_fields,
         text_fields=text_fields,
         private_metadata=private_metadata,
+        source=source,
     )

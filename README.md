@@ -6,12 +6,15 @@ Documentation:
 
 - [Simplified Chinese user guide](docs/README_zh.md)
 - [Technical specifications](docs/tech-specs.md)
+- [ZIP exchange format](docs/zip-format.md)
 
 ## Features
 
 - Search installed source plugins, inspect comics and chapters, materialize decoded pages, and send them to the normal Create workflow.
 - Use the official JMComic source backed by `jmcomic` 2.7.x or the deterministic offline test source.
-- Import files or folders, validate images by content, and sort filenames naturally.
+- Add local files or folders, or import an existing APNG or ZIP into the same Create/Edit model.
+- Export either standards-compliant APNG or a human-inspectable ZIP containing original image
+  encodings where practical plus versioned metadata.
 - Select multiple page thumbnails, box-select, remove, and drag pages to any insertion point.
 - Right-click a page to move it up, down, to the top, or to the bottom.
 - Select a cover, which is exported exactly once as APNG frame 0.
@@ -22,6 +25,7 @@ Documentation:
 - Extract generic APNG files without requiring ComicAPNG metadata.
 - Read static PNG and APNG comics manually with thumbnails, page jump, zoom, fit modes, fullscreen, dual-page mode, and left-to-right or right-to-left controls.
 - Preserve reading position outside the comic using a content fingerprint.
+- Restore normal window geometry, position, and maximized state with an off-screen safety check.
 - Decode full-resolution creator and reader pages on demand, with a bounded reader cache and a separate disk thumbnail cache.
 
 ComicAPNG private JSON metadata is optional. Generic standards-compliant APNG files remain readable and extractable when EXIF, PNG text, or ComicAPNG metadata is absent or malformed.
@@ -86,9 +90,9 @@ Generate the ten deterministic varied pages used for manual reorder testing:
 python scripts/generate_reorder_fixtures.py --output .tmp/reorder-fixtures
 ```
 
-Import that output directory into Create, or use the bundled Test Source to exercise the same
-Source-to-Create path without network access. The generated files are local test data and need not
-be committed.
+Import that output directory into Create/Edit, or use the bundled Test Source to exercise the same
+Source-to-Create/Edit path without network access. The generated files are local test data and
+need not be committed. They can also be used to test APNG import and ZIP export/import manually.
 
 Primary source files are ASCII-only. All visible interface text is stored in packaged JSON localization resources. English and Simplified Chinese are included.
 
@@ -126,6 +130,17 @@ Release-candidate tags use `vX.Y.Z-rc.N` and create GitHub prereleases. Stable t
 ComicAPNG writes 8-bit RGBA full-canvas frames. Each `fcTL` declares the complete virtual canvas at offset zero. Frames use source blending and no disposal, so every page independently replaces the preceding page, including transparent pixels. Frame timing is stored in APNG control chunks but normal reader navigation is manual.
 
 EXIF is stored in the standard PNG `eXIf` chunk. User PNG text and versioned ComicAPNG JSON use `iTXt`. Unsupported EXIF values are rejected before output replaces an existing file.
+
+Create/Edit imports logical, fully composited APNG frames. Valid ComicAPNG geometry may restore
+known original image bounds; generic APNG frames remain full-canvas and are never alpha-trimmed.
+An ordinary static PNG is not accepted by the dedicated Import APNG action and remains available
+through Add Images and the Reader.
+
+ZIP export uses current editable order and deterministic names such as `1.jpg`, `2.png`, and
+`3.webp`. ZIP import accepts image-only archives in natural order. If `metadata.json` page names do
+not exactly match all supported archive images, all page-bound metadata is discarded before the
+user chooses whether to keep document/source metadata, import only images, or cancel. See the
+[ZIP exchange format](docs/zip-format.md) for the schema and security limits.
 
 ## Known limitations
 

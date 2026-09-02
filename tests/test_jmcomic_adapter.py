@@ -10,6 +10,7 @@ import pytest
 from PIL import Image
 
 from comicapng.core.models import ComicPage
+from comicapng.core.zip_archive import ZipMetadataStatus, import_zip, write_zip
 from comicapng.extensions.jmcomic.adapter import JMComicPlugin
 from comicapng.extensions.jmcomic.mapper import PLUGIN_ID, map_album, map_chapters, map_search_page
 from comicapng.plugins.api import SourceChapter
@@ -220,6 +221,26 @@ def test_adapter_uses_manifest_order_and_downloads_cover(tmp_path: Path) -> None
     assert moved_page.is_cover is True
     assert [page.local_path for page in materialized.pages] == [
         path.resolve() for path in paths
+    ]
+    assert book.metadata.source is not None
+    assert book.metadata.source.plugin_id == PLUGIN_ID
+    assert book.metadata.source.resource_id == "123"
+    assert book.metadata.source.data["tags"] == ["tag-a", "tag-b"]
+
+    archive = tmp_path / "jmcomic.zip"
+    write_zip(book, archive)
+    imported = import_zip(archive, tmp_path / "jmcomic-import")
+    assert imported.metadata_status == ZipMetadataStatus.VALID
+    assert imported.book.metadata.source is not None
+    assert imported.book.metadata.source.plugin_id == PLUGIN_ID
+    assert imported.book.metadata.source.resource_id == "123"
+    assert imported.book.metadata.source.data["tags"] == ["tag-a", "tag-b"]
+    assert [page.source_metadata["source_id"] for page in imported.book.pages] == [
+        "301:1",
+        "301:5",
+        "301:2",
+        "301:3",
+        "301:4",
     ]
 
 

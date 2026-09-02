@@ -31,7 +31,7 @@ def _output_png_info(document: ApngDocument) -> PngImagePlugin.PngInfo:
     return pnginfo
 
 
-def _restore_original_bounds(
+def restore_frame_bounds(
     frame: Image.Image,
     geometry: dict[str, int] | None,
 ) -> Image.Image:
@@ -49,6 +49,9 @@ def _restore_original_bounds(
         restored = resized
     frame.close()
     return restored
+
+
+_restore_original_bounds = restore_frame_bounds
 
 
 def extract_apng(
@@ -78,7 +81,7 @@ def extract_apng(
             raise OperationCancelledError("APNG extraction was cancelled")
         frame = document.load_frame(index)
         if restore_original_bounds:
-            frame = _restore_original_bounds(frame, document.original_geometry(index))
+            frame = restore_frame_bounds(frame, document.original_geometry(index))
         temporary_name: str | None = None
         try:
             with tempfile.NamedTemporaryFile(

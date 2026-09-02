@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import struct
 import warnings
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -13,6 +14,35 @@ from PIL import Image, UnidentifiedImageError
 from .exceptions import InvalidApngError, ResourceLimitError
 from .metadata import PRIVATE_FORMAT_NAME, read_metadata
 from .models import ComicMetadata
+from .png_chunks import PNG_SIGNATURE
+
+
+def _has_animation_control(path: Path) -> bool:
+    """Distinguish a one-frame APNG from an ordinary static PNG."""
+    with path.open("rb") as stream:
+        if stream.read(len(PNG_SIGNATURE)) != PNG_SIGNATURE:
+            return False
+        has_animation_control = False
+        for _index in range(4096):
+            header = stream.read(8)
+            if len(header) != 8:
+                return False
+            length, chunk_type = struct.unpack(">I4s", header)
+            if chunk_type == b"acTL":
+                if length != 8:
+                    return False
+                payload = stream.read(8)
+                if len(payload) != 8:
+                    return False
+                has_animation_control = struct.unpack(">I", payload[:4])[0] > 0
+                stream.seek(4, 1)
+                continue
+            if chunk_type == b"fcTL" and has_animation_control:
+                return length == 26
+            if chunk_type == b"IEND":
+                return False
+            stream.seek(length + 4, 1)
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +77,7 @@ class ApngDocument:
                         path=self.path,
                         canvas_size=image.size,
                         frame_count=logical_count,
-                        is_animated=logical_count > 1,
+                        is_animated=_has_animation_control(self.path),
                         has_default_image=has_default,
                         metadata=read_metadata(image),
                         raw_exif=image.info.get("exif")

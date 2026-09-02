@@ -8,9 +8,11 @@ from pathlib import Path
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
+from comicapng.core.apng_importer import import_apng
 from comicapng.core.apng_reader import ApngDocument
 from comicapng.core.apng_writer import write_apng
 from comicapng.core.models import ComicPage
+from comicapng.core.zip_archive import ZipMetadataStatus, import_zip, write_zip
 from comicapng.extensions.test_source.reorder_fixtures import REORDER_FIXTURE_SPECS
 from comicapng.i18n import I18n
 from comicapng.plugins.api import (
@@ -197,5 +199,57 @@ def test_source_materialization_reorders_in_create_and_controls_export(
                 assert frame.getpixel((0, 480))[3] == 0
             if geometry["offset_y"] > 0:
                 assert frame.getpixel((480, 0))[3] == 0
+        finally:
+            frame.close()
+
+    editable = import_apng(output, tmp_path / "apng-edit-workspace")
+    assert all(type(page) is ComicPage for page in editable.pages)
+    assert editable.metadata.source is not None
+    assert editable.metadata.source.resource_id == "fixture-comic"
+    assert [
+        (page.source_width, page.source_height) for page in editable.pages
+    ] == [source_sizes[name] for name in expected_export_order]
+
+    editable.move_page(len(editable.pages) - 1, 0)
+    new_cover = editable.pages[5]
+    editable.set_cover(new_cover.page_id)
+    editable.move_page(5, 2)
+    expected_zip_sources = [dict(page.source_metadata) for page in editable.pages]
+    expected_zip_sizes = [
+        (page.source_width, page.source_height) for page in editable.pages
+    ]
+    expected_cover_source = dict(new_cover.source_metadata)
+
+    archive = tmp_path / "varied-edited.zip"
+    write_zip(editable, archive)
+    archive_result = import_zip(archive, tmp_path / "zip-edit-workspace")
+    assert archive_result.metadata_status == ZipMetadataStatus.VALID
+    archived = archive_result.book
+    assert [
+        (page.source_width, page.source_height) for page in archived.pages
+    ] == expected_zip_sizes
+    assert [page.source_metadata for page in archived.pages] == expected_zip_sources
+    assert archived.pages[2].is_cover is True
+    assert archived.pages[2].source_metadata == expected_cover_source
+
+    final_output = tmp_path / "varied-edited-roundtrip.apng"
+    write_apng(archived, final_output)
+    final_document = ApngDocument(final_output)
+    assert final_document.info.canvas_size == (960, 960)
+    assert final_document.info.frame_count == len(archived.pages)
+    expected_final_pages = archived.export_pages()
+    for index, page in enumerate(expected_final_pages):
+        geometry = final_document.original_geometry(index)
+        assert geometry is not None
+        assert (geometry["source_width"], geometry["source_height"]) == (
+            page.source_width,
+            page.source_height,
+        )
+        frame = final_document.load_frame(index)
+        try:
+            if geometry["offset_x"] > 0:
+                assert frame.getpixel((0, final_document.info.canvas_size[1] // 2))[3] == 0
+            if geometry["offset_y"] > 0:
+                assert frame.getpixel((final_document.info.canvas_size[0] // 2, 0))[3] == 0
         finally:
             frame.close()

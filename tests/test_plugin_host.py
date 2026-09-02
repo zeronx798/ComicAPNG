@@ -7,9 +7,11 @@ from threading import Event
 
 import pytest
 
+from comicapng.core.zip_archive import ZipMetadataStatus, import_zip, write_zip
 from comicapng.plugins.api import MaterializedChapter, SourceChapter, SourceComic, SourceSearchPage
 from comicapng.plugins.client import PluginHostClient
 from comicapng.plugins.errors import PluginCallError, PluginErrorCode
+from comicapng.plugins.source_book import comic_book_from_source
 
 
 def test_host_lists_and_runs_test_source(tmp_path: Path) -> None:
@@ -73,6 +75,31 @@ def test_host_lists_and_runs_test_source(tmp_path: Path) -> None:
     assert materialized.cover_path is not None
     assert materialized.cover_path.is_file()
     assert progress[-1] == (5, 5)
+
+    book = comic_book_from_source(
+        comic,
+        "ComicAPNG Test Source",
+        (materialized,),
+        include_cover=True,
+        cover_duration_ms=1000,
+        body_duration_ms=500,
+    )
+    archive = tmp_path / "test-source.zip"
+    write_zip(book, archive)
+    imported = import_zip(archive, tmp_path / "archive-workspace")
+    assert imported.metadata_status == ZipMetadataStatus.VALID
+    assert imported.book.metadata.source is not None
+    assert imported.book.metadata.source.plugin_id == "org.comicapng.source.test"
+    assert imported.book.metadata.source.resource_id == "fixture-comic"
+    assert imported.book.metadata.source.data["tags"] == ["fixture", "offline", "rgba"]
+    assert [page.source_metadata.get("source_page_index") for page in imported.book.pages] == [
+        None,
+        1,
+        2,
+        3,
+        4,
+        5,
+    ]
 
 
 def test_host_cancellation_is_controlled(tmp_path: Path) -> None:
