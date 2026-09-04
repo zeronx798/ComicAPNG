@@ -1,18 +1,17 @@
 # ComicAPNG Version Bump and Release SOP
 
-This procedure covers the desktop application version. It does not automatically change the
-Plugin API version, bundled plugin versions, APNG private-metadata schema, or ZIP schema. Those
-versions are independent and should change only when their own compatibility contract changes.
+This procedure updates the desktop application version. Plugin API, bundled source-module, APNG
+private-metadata, and ZIP schema versions follow independent compatibility contracts.
 
 ## 1. Choose the version
 
-Use a stable three-part version without a leading `v`, for example `1.2.3`.
+Use the stable three-part form `X.Y.Z`, for example `1.2.3`.
 
 - Increase the patch component for compatible fixes.
 - Increase the minor component for compatible features.
 - Increase the major component for incompatible application-level changes.
-- Keep the application version at `X.Y.Z` during release-candidate testing. The RC suffix belongs
-  to the Git tag, such as `vX.Y.Z-rc.1`, not to the application version.
+- Keep the application version at `X.Y.Z` during release-candidate testing. Encode the RC suffix
+  exclusively in the Git tag, such as `vX.Y.Z-rc.1`.
 
 ## 2. Verify the working context
 
@@ -21,8 +20,7 @@ git branch --show-current
 git status --short
 ```
 
-Confirm that the version bump is being made on the intended branch and that unrelated local work
-will not be included accidentally.
+Confirm the intended branch and a worktree containing only the changes planned for this release.
 
 ## 3. Update both authoritative values
 
@@ -31,10 +29,10 @@ Change the same `X.Y.Z` value in:
 1. `pyproject.toml`, under `[project] version`. Packaging and PyInstaller read this value.
 2. `src/comicapng/__init__.py`, in `__version__`. The application UI reads this value.
 
-`ComicAPNG.spec` already reads `pyproject.toml`; do not add another hard-coded version there.
+Keep `pyproject.toml` as the sole version input used by `ComicAPNG.spec`.
 
-Do not mass-replace version-like values. Test fixtures, release-tag grammar examples, plugin
-manifest versions, API versions, and file-format schema versions may intentionally differ.
+Update the two authoritative values individually. Preserve independent values in test fixtures,
+release-tag grammar examples, plugin manifests, API versions, and file-format schemas.
 
 ## 4. Refresh the editable installation
 
@@ -61,7 +59,7 @@ python scripts/validate_packaging.py
 ```
 
 The reported version must equal the value in `pyproject.toml`. The version synchronization test
-fails when the two authoritative source values differ.
+enforces equality between the two authoritative source values.
 
 ## 6. Build and smoke-test a native package
 
@@ -77,7 +75,7 @@ Linux or macOS:
 ./scripts/build.sh
 ```
 
-Confirm the About dialog/version label and run the normal APNG, ZIP, source-plugin, and frozen
+Confirm the About dialog/version label and run the normal APNG, ZIP, source-module, and frozen
 smoke checks appropriate to the release.
 
 ## 7. Review and commit
@@ -90,8 +88,8 @@ git add pyproject.toml src/comicapng/__init__.py tests/test_version.py docs/vers
 git commit -m "chore(release): bump version to X.Y.Z"
 ```
 
-Adjust the `git add` list if the SOP itself did not change. Merge the reviewed commit into `main`
-before tagging; the release workflow rejects tags whose commit is not contained in `origin/main`.
+Include the SOP in `git add` when it changes. Merge the reviewed commit into `main` before tagging;
+the release workflow accepts release tags whose commit is contained in `origin/main`.
 
 ## 8. Create an RC tag
 
@@ -104,8 +102,8 @@ git tag -a vX.Y.Z-rc.1 -m "ComicAPNG vX.Y.Z RC1"
 git push origin vX.Y.Z-rc.1
 ```
 
-Download and test all four generated prerelease artifacts. If changes are needed, merge a new
-commit and create `vX.Y.Z-rc.2`; never move an already published RC tag.
+Download and test all four generated prerelease artifacts. Published RC tags are immutable; apply
+changes in a new commit and create `vX.Y.Z-rc.2`.
 
 ## 9. Create the stable tag
 
@@ -118,5 +116,5 @@ git tag -a vX.Y.Z -m "ComicAPNG vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-Verify the GitHub Release contains the four expected native archives and `SHA256SUMS.txt`. Never
-rename RC assets into stable assets or move, delete, rewrite, or force-push a published release tag.
+Verify the GitHub Release contains the four expected native archives and `SHA256SUMS.txt`. Stable
+assets come from the stable-tag build, and published release tags remain immutable.

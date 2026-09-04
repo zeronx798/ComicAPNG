@@ -1,6 +1,6 @@
-# ComicAPNG Test Source
+# ComicAPNG Test Source Module
 
-This bundled source is deterministic and performs no network requests. Its two chapters contain
+This bundled source provides a deterministic offline implementation. Its two chapters contain
 ten strongly varied reorder fixtures with stable labels, dimensions, colors, and patterns. It
-exists so Plugin API, Plugin Host, Source-to-Create, page reordering, APNG export, and
-frozen-package smoke tests never depend on a live content service.
+supports Plugin API, Plugin Host, source-to-document conversion, page reordering, APNG export, and
+frozen-package smoke tests with stable local resources.
