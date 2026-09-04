@@ -1,10 +1,9 @@
-# JMComic Source Extension
+# JMComic Source Module
 
-This official first-party extension adapts the maintained `jmcomic` package to ComicAPNG Plugin
-API v1. It performs discovery and source-specific image download/decoding in the Plugin Host. The
-extension does not contain a ComicAPNG encoder and does not scrape or reproduce the upstream
-protocol.
+JMComic is one built-in source module and an example implementation of ComicAPNG Plugin API v1.
+It adapts the `jmcomic` dependency inside the Plugin Host to provide resource discovery, source
+metadata, and materialized page images through ComicAPNG-owned data-transfer objects.
 
-The MVP uses anonymous access exposed normally by `jmcomic`. It does not automate browsers,
-CAPTCHA, anti-bot challenges, paywalls, account restrictions, or DRM. Users are responsible for
-accessing and saving only content they are authorized to use.
+After materialization, the common source bridge creates an ordinary editable document. This module
+uses the common editor, document model, APNG encoder, and ZIP archive format. The core application
+continues to provide local import, editing, reading, and export through those shared components.

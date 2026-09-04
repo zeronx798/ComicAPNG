@@ -1,8 +1,8 @@
 # ComicAPNG ZIP Exchange Format v1
 
-ComicAPNG ZIP is a deliberately small, human-inspectable exchange format. An archive contains
-ordinary image files at its root and an optional `metadata.json` file. It does not contain a
-database and does not require ComicAPNG to extract it.
+ComicAPNG ZIP is a small, human-inspectable serialization of the unified document model. An
+archive contains ordinary image files at its root and an optional `metadata.json` file. The format
+is source-independent, database-free, and compatible with standard ZIP extraction tools.
 
 ## Layout
 
@@ -16,8 +16,8 @@ filenames. The extension describes the stored image bytes.
 metadata.json
 ```
 
-JPEG, PNG, WebP, BMP, and TIFF input bytes are retained without image re-encoding when Pillow
-identifies their format safely. A format that cannot be retained is normalized to PNG.
+JPEG, PNG, WebP, BMP, and TIFF input bytes are retained byte-for-byte when Pillow identifies their
+format safely. Other decoded image formats are normalized to PNG.
 
 ## metadata.json
 
@@ -67,33 +67,36 @@ v1 categories:
 ```
 
 `book` contains document-wide settings and user metadata. `source` contains optional JSON-only
-source identity and data. Each item in `pages` is bound to exactly one archive image by its exact
-filename. `cover` is also an exact page filename reference. Per-page duration, dimensions, and
-source information are page-bound.
+source identity and data. The example `plugin_id` is intentionally generic; real modules may store
+source-specific identifiers in `plugin_id`, `resource_id`, or `data`. Readers preserve validated
+values strictly as provenance.
+
+Each item in `pages` is bound to exactly one archive image by its exact filename. `cover` is also an
+exact page filename reference. Per-page duration, dimensions, and source information are
+page-bound.
 
 ## Import trust rules
 
-When `metadata.json` is absent, supported images are imported in natural filename order. This is a
-normal import and produces no warning.
+An archive containing supported images only is imported in natural filename order as a normal
+image-only document.
 
 When page metadata is present, the complete declared filename set must exactly equal the complete
-set of supported image entries. Metadata order is allowed to differ from natural order and becomes
-the editable order after a valid match. Matching is case-sensitive and does not use fuzzy repair.
+set of supported image entries. Metadata order may differ from natural order and becomes the
+editable order after a valid match. Matching is exact and case-sensitive.
 
-One missing, renamed, duplicated, or unexpected image invalidates every page-bound and
-page-reference field as a unit. ComicAPNG does not partially apply a matching prefix and does not
-offer a force option. The review dialog lists found, referenced, missing, unexpected, and invalid
-references. The user may then import only trusted book/source metadata, import images without any
-metadata, or cancel without changing the current document.
+One missing, renamed, duplicated, or unexpected image marks every page-bound and page-reference
+field untrusted as a unit. The review dialog lists found, referenced, missing, unexpected, and
+invalid references. The available choices are trusted document/source metadata with natural-order
+images, image-only import, or cancellation with the current document preserved.
 
-Malformed or unsupported metadata never makes otherwise readable images unusable. ComicAPNG
-reports the metadata problem and offers image-only import.
+Readable images remain available for image-only import when metadata is malformed or unsupported.
+ComicAPNG reports the metadata problem before the import choice.
 
 ## Security and limits
 
-ComicAPNG does not call `extractall`. It validates every entry name, rejects absolute paths,
-parent traversal, backslash paths, drive-qualified paths, duplicate names, and encrypted image
-entries, and copies only recognized images into application-owned sequential working files.
+ComicAPNG processes archive entries individually. It validates every entry name, rejects absolute
+paths, parent traversal, backslash paths, drive-qualified paths, duplicate names, and encrypted
+image entries, and copies only recognized images into application-owned sequential working files.
 Unrelated files such as README files, `.DS_Store`, and `Thumbs.db` are ignored as page content.
 
 The v1 implementation inspects both declared and actual copied sizes and applies these limits:
@@ -104,5 +107,5 @@ The v1 implementation inspects both declared and actual copied sizes and applies
 - 8 MiB for `metadata.json`.
 
 The temporary image workspace remains owned by the Create/Edit document. Reordering changes only
-the `ComicBook.pages` list. Replacing or cancelling an import and exiting the application clean the
-owned workspace.
+the document's ordered page collection. Replacing or cancelling an import and exiting the
+application clean the owned workspace.
