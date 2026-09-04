@@ -7,6 +7,7 @@ Documentation:
 - [Simplified Chinese user guide](docs/README_zh.md)
 - [Technical specifications](docs/tech-specs.md)
 - [ZIP exchange format](docs/zip-format.md)
+- [Version bump and release SOP](docs/version-bump-sop.md)
 
 ## Features
 
@@ -123,7 +124,7 @@ Development builds are available from the GitHub repository under **Actions**, t
 
 The Linux archive is built on Ubuntu 22.04 and is not claimed to work on every Linux distribution. The two macOS builds are architecture-specific, not universal applications. Automated macOS builds are not signed with an Apple Developer ID and are not notarized, so Gatekeeper may require manual approval. PyInstaller may apply the ad-hoc signatures required for executable integrity, but those signatures do not establish developer trust.
 
-Release-candidate tags use `vX.Y.Z-rc.N` and create GitHub prereleases. Stable tags use `vX.Y.Z` and create normal releases. Each valid tag receives its own complete build; the release job attaches those exact build archives plus `SHA256SUMS.txt`. Other `v*` tag forms are rejected. See the [release procedure](docs/tech-specs.md#18-release-procedure) for the recommended PR, manual-build, RC, and stable sequence.
+Release-candidate tags use `vX.Y.Z-rc.N` and create GitHub prereleases. Stable tags use `vX.Y.Z` and create normal releases. Each valid tag receives its own complete build; the release job attaches those exact build archives plus `SHA256SUMS.txt`. Other `v*` tag forms are rejected. See the [version bump and release SOP](docs/version-bump-sop.md) and [release procedure](docs/tech-specs.md#19-release-procedure) for the recommended version, PR, manual-build, RC, and stable sequence.
 
 ## APNG format policy
 

@@ -347,11 +347,11 @@ A normal push or merge to `main` runs the same complete build and uploads artifa
 
 ### RC tag
 
-A pushed tag such as `v1.0.0-rc.1` is classified as `rc`. After all four matrix entries succeed, the release job downloads their uploaded archives, creates `SHA256SUMS.txt`, and publishes a GitHub prerelease using that exact tag and GitHub-generated notes.
+A pushed tag such as `v1.2.3-rc.1` is classified as `rc`. After all four matrix entries succeed, the release job downloads their uploaded archives, creates `SHA256SUMS.txt`, and publishes a GitHub prerelease using that exact tag and GitHub-generated notes.
 
 ### stable tag
 
-A pushed tag such as `v1.0.0` is classified as `stable`. It receives a new complete build from the stable tagged commit. After all four builds succeed, the release job reuses those exact archives, generates checksums, and publishes a normal GitHub Release. RC binaries are not renamed or promoted.
+A pushed tag such as `v1.2.3` is classified as `stable`. It receives a new complete build from the stable tagged commit. After all four builds succeed, the release job reuses those exact archives, generates checksums, and publishes a normal GitHub Release. RC binaries are not renamed or promoted.
 
 The Actions artifact names are:
 
@@ -380,11 +380,15 @@ Release candidates use exactly:
 ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$
 ```
 
-Examples are `v1.0.0` and `v1.0.0-rc.1`. Other `v*` tags, including alpha, beta, test, shortened, or arbitrary-hyphen forms, fail the release-policy job with a clear diagnostic before the four-platform matrix starts. They cannot publish. Tags not beginning with `v` are outside this workflow's tag trigger.
+Examples are `v1.2.3` and `v1.2.3-rc.1`. Other `v*` tags, including alpha, beta, test, shortened, or arbitrary-hyphen forms, fail the release-policy job with a clear diagnostic before the four-platform matrix starts. They cannot publish. Tags not beginning with `v` are outside this workflow's tag trigger.
 
 ## 19. Release Procedure
 
 The recommended sequence is:
+
+The application-version update and validation steps are defined in the
+[version bump and release SOP](version-bump-sop.md). Complete that SOP and merge the version-bump
+commit before creating either an RC or stable tag.
 
 1. Develop through pull requests and merge approved changes into `main`.
 2. Open GitHub Actions, select **Build ComicAPNG**, run `workflow_dispatch` on `main`, download all four artifacts, and test the relevant native binaries.
@@ -394,18 +398,18 @@ The recommended sequence is:
    ```sh
    git switch main
    git pull --ff-only origin main
-   git tag -a v1.0.0-rc.1 -m "ComicAPNG v1.0.0 RC1"
-   git push origin v1.0.0-rc.1
+   git tag -a v1.2.3-rc.1 -m "ComicAPNG v1.2.3 RC1"
+   git push origin v1.2.3-rc.1
    ```
 
-5. Download and test the generated prerelease assets. If changes are needed, merge them and create the next tag, such as `v1.0.0-rc.2` or `v1.0.0-rc.3`.
+5. Download and test the generated prerelease assets. If changes are needed, merge them and create the next tag, such as `v1.2.3-rc.2` or `v1.2.3-rc.3`.
 6. After an RC is accepted, make sure the desired commit is on current `main`, then create and push the stable tag:
 
    ```sh
    git switch main
    git pull --ff-only origin main
-   git tag -a v1.0.0 -m "ComicAPNG v1.0.0"
-   git push origin v1.0.0
+   git tag -a v1.2.3 -m "ComicAPNG v1.2.3"
+   git push origin v1.2.3
    ```
 
 7. GitHub Actions rebuilds all platforms from the stable tagged commit and publishes a normal release from those new archives.

@@ -122,7 +122,7 @@ python scripts/generate_reorder_fixtures.py --output .tmp/reorder-fixtures
 
 如需完整的预发布构建测试，请在 GitHub **Actions** 中打开 **Build ComicAPNG**，单击 **Run workflow**，选择 `main` 后运行。工作流会测试并构建四个平台，生成四个 Artifacts，但不会创建标签或 GitHub Release。
 
-发布候选版本使用 `v1.0.0-rc.1` 形式的标签，并自动创建 prerelease。稳定版本使用 `v1.0.0` 形式的标签，并从稳定标签对应的提交重新构建后创建正式 Release。
+发布候选版本使用 `vX.Y.Z-rc.N` 形式的标签，并自动创建 prerelease。稳定版本使用 `vX.Y.Z` 形式的标签，并从稳定标签对应的提交重新构建后创建正式 Release。
 
 ## 常见问题
 

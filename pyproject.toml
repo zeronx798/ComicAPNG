@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ComicAPNG"
-version = "1.0.0"
+version = "1.1.0"
 description = "Create, extract, and read APNG comic books"
 readme = "README.md"
 requires-python = ">=3.11"
